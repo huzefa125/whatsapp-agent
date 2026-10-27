@@ -25,6 +25,7 @@ export function getAiProvider(): AiProvider {
         defaultModel: config.AI_MODEL || 'llama-3.3-70b-versatile',
         defaultMaxTokens: config.AI_MAX_TOKENS,
         defaultTemperature: config.AI_TEMPERATURE,
+        timeoutMs: config.AI_TIMEOUT_MS,
       });
     } else if (config.AI_PROVIDER === 'gemini') {
       const model = config.AI_MODEL || 'gemini-3.5-flash';
@@ -35,6 +36,7 @@ export function getAiProvider(): AiProvider {
         defaultModel: model,
         defaultMaxTokens: config.AI_MAX_TOKENS,
         defaultTemperature: config.AI_TEMPERATURE,
+        timeoutMs: config.AI_TIMEOUT_MS,
       });
     } else {
       // Default: OpenAI or compatible endpoint
@@ -45,6 +47,7 @@ export function getAiProvider(): AiProvider {
         defaultModel: config.AI_MODEL,
         defaultMaxTokens: config.AI_MAX_TOKENS,
         defaultTemperature: config.AI_TEMPERATURE,
+        timeoutMs: config.AI_TIMEOUT_MS,
       });
     }
   }

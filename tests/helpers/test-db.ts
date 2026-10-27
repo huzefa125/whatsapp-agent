@@ -15,9 +15,13 @@ if (TEST_DATABASE_URL) {
 // Tests must never reach a real model or run a background worker.
 process.env.AI_PROVIDER = 'stub';
 process.env.AGENT_WORKER_ENABLED = 'false';
+process.env.REMINDER_WORKER_ENABLED = 'false';
+process.env.REMINDER_PROVIDER = 'mock';
+// Low per-user write limit so the rate-limit test is cheap; other tests use a fresh user each.
+process.env.REMINDER_RATE_LIMIT_MAX = process.env.REMINDER_RATE_LIMIT_MAX ?? '8';
 
 import { getDb } from '../../src/db/client';
-import { users, sessions, conversations, agentTasks } from '../../src/db/schema';
+import { users, sessions, conversations, agentTasks, messages } from '../../src/db/schema';
 import { generateSessionToken, hashSessionToken } from '../../src/utils/otp';
 import { eq, sql } from 'drizzle-orm';
 
@@ -67,4 +71,31 @@ export async function getTaskRow(taskId: string) {
 /** Clears every agent table so leftovers from earlier runs cannot be claimed by this run's workers. */
 export async function resetAgentTables(): Promise<void> {
   await getDb().execute(sql`TRUNCATE agent_tool_calls, agent_task_attempts, agent_tasks CASCADE`);
+}
+
+export async function setTestUserTimezone(userId: string, timezone: string | null): Promise<void> {
+  await getDb().update(users).set({ timezone }).where(eq(users.id, userId));
+}
+
+/** A REAL-looking inbound WhatsApp message (has a provider message ID) at a given time. */
+export async function insertInboundWhatsAppMessage(userId: string, at: Date): Promise<void> {
+  const conversationId = await createTestConversation(userId);
+  await getDb().insert(messages).values({
+    conversationId,
+    userId,
+    role: 'user',
+    content: 'hi',
+    providerMessageId: `wamid.${randomUUID()}`,
+    createdAt: at,
+  });
+}
+
+/** An API-created user message: no provider ID, so it must NOT open the WhatsApp 24h window. */
+export async function insertApiMessage(userId: string, at: Date): Promise<void> {
+  const conversationId = await createTestConversation(userId);
+  await getDb().insert(messages).values({ conversationId, userId, role: 'user', content: 'api', createdAt: at });
+}
+
+export async function resetReminderTables(): Promise<void> {
+  await getDb().execute(sql`TRUNCATE reminders CASCADE`);
 }

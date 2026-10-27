@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { getConfig } from '../config/env';
 import { verifyWebhookChallenge, verifyWebhookSignature, parseWebhookPayload } from '../services/whatsapp/webhook';
 import { getOutboxService } from '../services/queue/outbox';
+import { getReminderService } from '../services/reminders/reminder-service';
 import { ForbiddenError } from '../utils/errors';
 import { logger } from '../utils/logger';
 
@@ -90,6 +91,12 @@ export class WebhookController {
             },
             'Received WhatsApp message status update'
           );
+          // Confirmed delivery / failure for reminders we sent. Must never fail the webhook ack.
+          try {
+            await getReminderService().recordProviderStatus(event);
+          } catch (statusErr) {
+            logger.error({ err: statusErr, messageId: event.providerMessageId }, 'Failed to apply WhatsApp status to reminder');
+          }
         }
       }
 

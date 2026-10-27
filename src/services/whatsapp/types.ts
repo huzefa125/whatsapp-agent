@@ -89,6 +89,18 @@ export interface WhatsAppSendTextRequest {
   to: string;
   text: string;
   previewUrl?: boolean;
+  /** Internal HTTP retries (default 2). Use 0 when the caller owns retries and duplicates matter. */
+  maxRetries?: number;
+}
+
+export interface WhatsAppSendTemplateRequest {
+  to: string;
+  /** Name of a template approved in WhatsApp Manager. */
+  templateName: string;
+  languageCode: string;
+  /** Values for {{1}}, {{2}}, ... in the template body. */
+  bodyParameters: string[];
+  maxRetries?: number;
 }
 
 export interface WhatsAppSendMessageResult {

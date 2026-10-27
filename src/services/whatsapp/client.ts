@@ -1,4 +1,4 @@
-import { WhatsAppSendTextRequest, WhatsAppSendMessageResult } from './types';
+import { WhatsAppSendTextRequest, WhatsAppSendTemplateRequest, WhatsAppSendMessageResult } from './types';
 import { AppError, ExternalServiceError, RateLimitError } from '../../utils/errors';
 import { withRetry } from '../../utils/retry';
 import { logger } from '../../utils/logger';
@@ -12,6 +12,7 @@ export interface WhatsAppClientConfig {
 
 export interface IWhatsAppClient {
   sendTextMessage(request: WhatsAppSendTextRequest): Promise<WhatsAppSendMessageResult>;
+  sendTemplateMessage?(request: WhatsAppSendTemplateRequest): Promise<WhatsAppSendMessageResult>;
 }
 
 export class WhatsAppClient implements IWhatsAppClient {
@@ -77,6 +78,47 @@ export class WhatsAppClient implements IWhatsAppClient {
 
     logger.debug({ recipient: cleanTo, textLength: sanitizedText.length }, 'Dispatching WhatsApp message');
 
+    return this.post(payload, cleanTo, request.maxRetries ?? 2);
+  }
+
+  /**
+   * Sends an approved template message (required outside the 24h customer-service window).
+   */
+  async sendTemplateMessage(request: WhatsAppSendTemplateRequest): Promise<WhatsAppSendMessageResult> {
+    const cleanTo = request.to.replace(/\D/g, '');
+    if (!cleanTo || cleanTo.length < 8 || cleanTo.length > 16) {
+      throw new AppError('Invalid recipient phone number', 400, 'WHATSAPP_INVALID_RECIPIENT');
+    }
+    if (!request.templateName.trim()) {
+      throw new AppError('Template name is required', 400, 'WHATSAPP_TEMPLATE_CONFIG');
+    }
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: cleanTo,
+      type: 'template',
+      template: {
+        name: request.templateName,
+        language: { code: request.languageCode },
+        components: [
+          {
+            type: 'body',
+            parameters: request.bodyParameters.map((text) => ({ type: 'text', text })),
+          },
+        ],
+      },
+    };
+
+    logger.debug({ templateName: request.templateName }, 'Dispatching WhatsApp template message');
+    return this.post(payload, cleanTo, request.maxRetries ?? 2);
+  }
+
+  private async post(
+    payload: Record<string, unknown>,
+    cleanTo: string,
+    maxRetries: number
+  ): Promise<WhatsAppSendMessageResult> {
     const result = await withRetry(
       async () => {
         const controller = new AbortController();
@@ -146,7 +188,7 @@ export class WhatsAppClient implements IWhatsAppClient {
         }
       },
       {
-        maxRetries: 2,
+        maxRetries,
         initialDelayMs: 500,
         retryableErrors: (err) => {
           if (err instanceof RateLimitError) return true;

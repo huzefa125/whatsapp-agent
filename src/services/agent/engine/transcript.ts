@@ -11,7 +11,14 @@ export const transcriptMessageSchema = z.discriminatedUnion('role', [
     role: z.literal('assistant'),
     content: z.string().nullable(),
     toolCalls: z
-      .array(z.object({ id: z.string(), name: z.string(), rawArguments: z.string() }))
+      .array(
+        z.object({
+          id: z.string(),
+          name: z.string(),
+          rawArguments: z.string(),
+          providerMetadata: z.unknown().optional(),
+        })
+      )
       .optional(),
   }),
   z.object({

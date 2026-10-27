@@ -15,6 +15,8 @@ import {
 } from './task-types';
 import { calculatorTool } from './tools/calculator';
 import { ToolRegistry } from './tool-registry';
+import { getReminderService, ReminderService } from '../../reminders/reminder-service';
+import { createReminderTools } from '../../reminders/reminder-tools';
 
 export interface CreateTaskRequest {
   request: string;
@@ -27,10 +29,14 @@ export interface TaskServiceDeps {
   runner?: AgentRunner;
   registry?: ToolRegistry;
   permissions?: PermissionResolver;
+  reminders?: ReminderService;
 }
 
-export function createDefaultToolRegistry(): ToolRegistry {
-  return new ToolRegistry().register(calculatorTool);
+/** Built-in tools: the demo calculator plus the reminder tools (create/list/reschedule/cancel/complete). */
+export function createDefaultToolRegistry(reminders: ReminderService = getReminderService()): ToolRegistry {
+  const registry = new ToolRegistry().register(calculatorTool);
+  for (const tool of createReminderTools(reminders)) registry.register(tool);
+  return registry;
 }
 
 export class AgentTaskService {
@@ -43,7 +49,8 @@ export class AgentTaskService {
 
   constructor(deps: TaskServiceDeps = {}) {
     this.repo = deps.repo ?? new AgentTaskRepository();
-    this.registry = deps.registry ?? createDefaultToolRegistry();
+    const reminders = deps.reminders ?? getReminderService();
+    this.registry = deps.registry ?? createDefaultToolRegistry(reminders);
     this.runner =
       deps.runner ??
       new AgentRunner({
@@ -51,6 +58,7 @@ export class AgentTaskService {
         registry: this.registry,
         permissions: deps.permissions ?? new DefaultPermissionResolver(),
         getProvider: getAiProvider,
+        systemContext: (userId) => reminders.buildAgentContext(userId),
       });
   }
 

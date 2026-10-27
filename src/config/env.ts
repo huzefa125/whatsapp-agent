@@ -27,6 +27,8 @@ const envSchema = z.object({
   AI_BASE_URL: z.string().url().optional(),
   AI_MODEL: z.string().default('gpt-4o-mini'),
   AI_MAX_TOKENS: z.coerce.number().int().positive().default(1000),
+  // Per-request HTTP timeout. Thinking models (e.g. Gemini 3.x) can take 10s+ for a tool-calling turn.
+  AI_TIMEOUT_MS: z.coerce.number().int().min(1000).default(30000),
   AI_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.7),
 
   // Agent Task Engine
@@ -37,7 +39,7 @@ const envSchema = z.object({
   AGENT_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(2000),
   AGENT_MAX_TOOL_ROUNDS: z.coerce.number().int().min(1).max(20).default(5),
   AGENT_MAX_TOOL_CALLS_PER_ROUND: z.coerce.number().int().min(1).max(10).default(4),
-  AGENT_MODEL_TIMEOUT_MS: z.coerce.number().int().min(1000).default(30000),
+  AGENT_MODEL_TIMEOUT_MS: z.coerce.number().int().min(1000).default(60000),
   AGENT_TASK_TIMEOUT_MS: z.coerce.number().int().min(1000).default(120000),
   AGENT_MAX_TOOL_OUTPUT_CHARS: z.coerce.number().int().min(100).default(4000),
   AGENT_MAX_REQUEST_CHARS: z.coerce.number().int().min(1).default(4000),
@@ -47,7 +49,33 @@ const envSchema = z.object({
   AGENT_HISTORY_LIMIT: z.coerce.number().int().min(0).max(100).default(20),
   AGENT_CONFIRMATION_TTL_MINUTES: z.coerce.number().int().min(1).default(30),
   // Comma-separated permissions granted to every fully verified user (no per-user grants yet).
-  AGENT_DEFAULT_PERMISSIONS: z.string().default('utility:read'),
+  AGENT_DEFAULT_PERMISSIONS: z.string().default('utility:read,reminders:read,reminders:write'),
+
+  // Reminders & Scheduling
+  REMINDER_WORKER_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  // 'whatsapp' = official WhatsApp Business Platform. 'mock' never contacts WhatsApp (dev/tests only).
+  // Defaults to 'whatsapp' in production and 'mock' elsewhere; 'mock' is rejected in production.
+  REMINDER_PROVIDER: z.enum(['whatsapp', 'mock']).optional(),
+  REMINDER_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(5000),
+  REMINDER_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(10),
+  REMINDER_LEASE_SECONDS: z.coerce.number().int().min(10).default(120),
+  REMINDER_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),
+  REMINDER_SEND_TIMEOUT_MS: z.coerce.number().int().min(1000).default(15000),
+  REMINDER_MAX_TITLE_CHARS: z.coerce.number().int().min(1).max(1000).default(500),
+  REMINDER_MAX_HORIZON_DAYS: z.coerce.number().int().min(1).default(365),
+  REMINDER_MIN_LEAD_SECONDS: z.coerce.number().int().min(0).default(5),
+  REMINDER_MAX_ACTIVE_PER_USER: z.coerce.number().int().min(1).default(100),
+  REMINDER_MAX_CREATES_PER_HOUR: z.coerce.number().int().min(1).default(30),
+  // Agent-created reminders further out than this (or at 00:00-04:59 local) need explicit user confirmation.
+  REMINDER_CONFIRM_BEYOND_DAYS: z.coerce.number().int().min(1).default(30),
+  REMINDER_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1000).default(60000),
+  REMINDER_RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(20),
+  // Approved WhatsApp template (one body variable {{1}} = reminder text) for use outside the 24h window.
+  WHATSAPP_REMINDER_TEMPLATE_NAME: z.string().optional(),
+  WHATSAPP_REMINDER_TEMPLATE_LANG: z.string().default('en'),
 
   // Security & Rate Limiting
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(900000),
@@ -101,6 +129,9 @@ export function validateEnv(customEnv?: Record<string, unknown>): EnvConfig {
     if (config.AI_PROVIDER !== 'stub' && (!config.AI_API_KEY || config.AI_API_KEY.startsWith('your_'))) {
       throw new Error('Production environment requires a valid AI_API_KEY for the chosen AI_PROVIDER');
     }
+    if (config.REMINDER_PROVIDER === 'mock') {
+      throw new Error('Production environment must not use REMINDER_PROVIDER=mock (it never delivers to WhatsApp)');
+    }
     if (config.AUTH_OTP_HMAC_SECRET === 'test_auth_otp_hmac_secret_32_characters_long!') {
       throw new Error('Production environment requires a secure, non-default AUTH_OTP_HMAC_SECRET');
     }
@@ -145,9 +176,11 @@ export function getConfig(): EnvConfig {
         WHATSAPP_APP_SECRET: 'test_app_secret_32_bytes_meta_mock',
         WHATSAPP_ACCESS_TOKEN: 'test_access_token',
         WHATSAPP_PHONE_NUMBER_ID: '1234567890',
-        AI_PROVIDER: 'stub',
         AI_MODEL: 'test-model',
         ...process.env,
+        // Hard guard: a developer's real .env must never make the test suite call a paid model.
+        AI_PROVIDER: 'stub',
+        AI_API_KEY: '',
       });
     } else {
       cachedConfig = validateEnv();

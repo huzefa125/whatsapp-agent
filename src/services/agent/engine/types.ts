@@ -49,8 +49,14 @@ export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   execute(input: TInput, ctx: ToolExecutionContext): Promise<TOutput>;
   /** Maps handler output to the (smaller) shape the model may see. Defaults to the raw output. */
   formatResult?(output: TOutput): unknown;
-  /** One-line, non-sensitive description of a pending call, shown to the user for confirmation. */
-  describeCall?(input: TInput): string;
+  /**
+   * Per-call confirmation rule, evaluated by the engine AFTER validation and authorization, on the
+   * validated arguments. Lets a normally-harmless tool demand approval for surprising inputs.
+   * Cannot waive `requiresConfirmation`.
+   */
+  shouldConfirm?(input: TInput, ctx: { userId: string }): boolean | Promise<boolean>;
+  /** One-line description of a pending call, shown to the user for confirmation. */
+  describeCall?(input: TInput, ctx: { userId: string }): string | Promise<string>;
 }
 
 /** Type-erased definition as stored in the registry. */

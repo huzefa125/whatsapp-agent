@@ -16,7 +16,12 @@ export const toolCalls = (...calls: Array<Partial<ModelToolCall> & { name: strin
   kind: 'tool_calls',
   content: null,
   model: 'mock-model',
-  toolCalls: calls.map((c, i) => ({ id: c.id ?? `provider-id-${i}`, name: c.name, rawArguments: c.rawArguments ?? '{}' })),
+  toolCalls: calls.map((c, i) => ({
+    id: c.id ?? `provider-id-${i}`,
+    name: c.name,
+    rawArguments: c.rawArguments ?? '{}',
+    ...(c.providerMetadata !== undefined ? { providerMetadata: c.providerMetadata } : {}),
+  })),
 });
 
 /** Deterministic stand-in for Gemini: replays a script and records exactly what it was sent. */

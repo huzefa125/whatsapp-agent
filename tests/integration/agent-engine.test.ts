@@ -159,6 +159,49 @@ describe.skipIf(!hasTestDb)('Agent task engine (PostgreSQL)', () => {
     expect(ledger).toMatchObject({ callId: 'call_1_1', status: 'succeeded', toolName: 'calculator' });
   });
 
+  it('hands opaque provider metadata (Gemini thought signatures) back on the next model call', async () => {
+    await users();
+    const signature = { google: { thought_signature: 'sig-abc123' } };
+    const { service, provider } = build([
+      toolCalls({ name: 'calculator', rawArguments: '{"expression":"1+1"}', providerMetadata: signature }),
+      text('Two.'),
+    ]);
+    const { task } = await service.createTask(alice.id, { request: 'what is 1+1' });
+    await drain(service);
+
+    expect((await service.getTask(alice.id, task.id)).status).toBe('succeeded');
+    const assistant = provider.calls[1]!.messages.find((m) => m.role === 'assistant') as { toolCalls: Array<{ providerMetadata?: unknown }> };
+    expect(assistant.toolCalls[0]!.providerMetadata).toEqual(signature);
+    // and it survives the database round trip of the checkpointed transcript
+    const stored = (await getTaskRow(task.id))!.transcript as Array<{ toolCalls?: Array<{ providerMetadata?: unknown }> }>;
+    expect(stored.find((m) => m.toolCalls)!.toolCalls![0]!.providerMetadata).toEqual(signature);
+  });
+
+  it('drops oversized provider metadata instead of persisting it', async () => {
+    await users();
+    const huge = { google: { thought_signature: 'x'.repeat(20_000) } };
+    const { service, provider } = build([toolCalls({ name: 'calculator', rawArguments: '{"expression":"1+1"}', providerMetadata: huge }), text('ok')]);
+    await service.createTask(alice.id, { request: 'x' });
+    await drain(service);
+    const assistant = provider.calls[1]!.messages.find((m) => m.role === 'assistant') as { toolCalls: Array<{ providerMetadata?: unknown }> };
+    expect(assistant.toolCalls[0]!.providerMetadata).toBeUndefined();
+  });
+
+  it('waits much longer before retrying a provider RATE LIMIT than an ordinary provider error', async () => {
+    await users();
+    const rate = build([new RateLimitError('429')], { config: { retryBackoffBaseMs: 2000 } });
+    const other = build([new ExternalServiceError('AI Provider', 'boom')], { config: { retryBackoffBaseMs: 2000 } });
+    const a = await rate.service.createTask(alice.id, { request: 'x' });
+    const b = await other.service.createTask(alice.id, { request: 'y' });
+    await rate.service.processNext();
+    await other.service.processNext();
+    const ra = (await getTaskRow(a.task.id))!;
+    const rb = (await getTaskRow(b.task.id))!;
+    // base 2s: ordinary errors ~2s, rate limits >= 15 x 2s = 30s
+    expect(ra.runAfter.getTime() - Date.now()).toBeGreaterThan(25_000);
+    expect(rb.runAfter.getTime() - Date.now()).toBeLessThan(10_000);
+  });
+
   // ---------------------------------------------------------------- hostile / malformed model output
 
   it.each([

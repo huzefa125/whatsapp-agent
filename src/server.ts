@@ -4,6 +4,8 @@ import { getConfig, getSafeConfig } from './config/env';
 import { checkDatabaseConnection, closeDatabaseConnection } from './db/client';
 import { getOutboxService } from './services/queue/outbox';
 import { getAgentTaskService } from './services/agent/engine/task-service';
+import { getReminderWorker } from './services/reminders/reminder-worker';
+import { resolveProviderKind } from './services/notifications';
 import { logger } from './utils/logger';
 
 export async function startServer(): Promise<http.Server> {
@@ -38,6 +40,17 @@ export async function startServer(): Promise<http.Server> {
     logger.info('Agent task worker disabled via AGENT_WORKER_ENABLED=false');
   }
 
+  // Start durable reminder scheduler (claims due reminders with SKIP LOCKED; safe across instances)
+  const reminderWorker = getReminderWorker();
+  if (config.REMINDER_WORKER_ENABLED) {
+    if (resolveProviderKind(config) === 'mock') {
+      logger.warn('REMINDER_PROVIDER=mock: reminders will be recorded locally and NOT delivered to WhatsApp');
+    }
+    reminderWorker.start();
+  } else {
+    logger.info('Reminder worker disabled via REMINDER_WORKER_ENABLED=false');
+  }
+
   const app = createApp();
   const server = http.createServer(app);
 
@@ -68,6 +81,7 @@ export async function startServer(): Promise<http.Server> {
       // 1. Stop background worker
       outboxService.stopWorker();
       await agentTasks.stopWorker();
+      await reminderWorker.stop();
 
       // 2. Close HTTP server
       await new Promise<void>((resolve, reject) => {

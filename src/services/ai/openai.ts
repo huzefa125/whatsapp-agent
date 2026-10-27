@@ -139,11 +139,13 @@ export class OpenAiCompatibleProvider implements AiProvider {
             content: m.content,
             ...(m.toolCalls && m.toolCalls.length > 0
               ? {
+                  // `extra_content` is a Gemini extension (thought signatures) absent from OpenAI's typings.
                   tool_calls: m.toolCalls.map((c) => ({
                     id: c.id,
                     type: 'function' as const,
                     function: { name: c.name, arguments: c.rawArguments },
-                  })),
+                    ...(c.providerMetadata !== undefined ? { extra_content: c.providerMetadata } : {}),
+                  })) as OpenAI.Chat.ChatCompletionMessageToolCall[],
                 }
               : {}),
           };
@@ -197,7 +199,16 @@ export class OpenAiCompatibleProvider implements AiProvider {
 
       const calls = (choice.message.tool_calls ?? []).flatMap((c) =>
         c.type === 'function'
-          ? [{ id: c.id ?? '', name: c.function.name, rawArguments: c.function.arguments ?? '' }]
+          ? [
+              {
+                id: c.id ?? '',
+                name: c.function.name,
+                rawArguments: c.function.arguments ?? '',
+                ...((c as { extra_content?: unknown }).extra_content !== undefined
+                  ? { providerMetadata: (c as { extra_content?: unknown }).extra_content }
+                  : {}),
+              },
+            ]
           : []
       );
 

@@ -285,6 +285,103 @@ export const swaggerDocument = {
         },
       },
     },
+    '/api/users/me': {
+      patch: {
+        summary: 'Set My Timezone',
+        description:
+          'Sets the IANA timezone (e.g. Asia/Kolkata) used to interpret and display reminder times. Abbreviations such as IST/EST and fixed offsets are rejected.',
+        tags: ['Reminders'],
+        security: [{ BearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { type: 'object', required: ['timezone'], properties: { timezone: { type: 'string', example: 'Asia/Kolkata' } } },
+            },
+          },
+        },
+        responses: { '200': { description: 'Timezone saved' }, '400': { description: 'Invalid timezone' }, '401': { description: 'Unauthorized' } },
+      },
+    },
+    '/api/reminders': {
+      post: {
+        summary: 'Create Reminder',
+        description:
+          'Schedules a one-time reminder. `when` is one of: {kind:"relative",amount,unit:"minutes"|"hours"}, {kind:"local",date:"YYYY-MM-DD",time:"HH:mm",disambiguation?:"earlier"|"later"} (interpreted in the user timezone), or {kind:"instant",at:ISO-8601 with offset}. Nonexistent/ambiguous DST times, past times and times beyond the horizon return 422 with a code. Requires a configured timezone. Supports Idempotency-Key.',
+        tags: ['Reminders'],
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'Idempotency-Key', in: 'header', required: false, schema: { type: 'string', maxLength: 128 } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['title', 'when'],
+                properties: {
+                  title: { type: 'string', example: 'Call the client' },
+                  when: { type: 'object', example: { kind: 'local', date: '2026-10-28', time: '10:00' } },
+                  idempotencyKey: { type: 'string', maxLength: 128 },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '201': { description: 'Created; body includes remindAtLocal (the interpreted local time) and timezone' },
+          '200': { description: 'Idempotent replay' },
+          '400': { description: 'Validation error' },
+          '409': { description: 'Idempotency key reused with different content' },
+          '422': { description: 'Unschedulable time, missing timezone, or invalid title' },
+          '429': { description: 'Rate limited or reminder quota reached' },
+        },
+      },
+      get: {
+        summary: 'List My Reminders',
+        description: 'Filters: status, upcoming=true (still-scheduled from now, soonest first), limit (1-100), offset.',
+        tags: ['Reminders'],
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['scheduled', 'processing', 'sent', 'failed', 'cancelled', 'completed'] } },
+          { name: 'upcoming', in: 'query', schema: { type: 'boolean' } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+          { name: 'offset', in: 'query', schema: { type: 'integer', minimum: 0, default: 0 } },
+        ],
+        responses: { '200': { description: 'Reminders' }, '400': { description: 'Validation error' } },
+      },
+    },
+    '/api/reminders/{id}': {
+      get: {
+        summary: 'Get Reminder',
+        description:
+          'Details and status. delivery.state is not_sent | accepted_by_provider (WhatsApp accepted the request) | delivered (WhatsApp confirmed) | failed. delivery.simulated=true means the mock provider was used and nothing reached WhatsApp.',
+        tags: ['Reminders'],
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Reminder' }, '404': { description: 'Not found (or not yours)' } },
+      },
+      patch: {
+        summary: 'Reschedule, Retitle or Complete Reminder',
+        description: 'Body: {when?, title?} or {status:"completed"|"cancelled"} (not combined). Only scheduled/failed reminders can be rescheduled.',
+        tags: ['Reminders'],
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: {
+          '200': { description: 'Updated reminder' },
+          '404': { description: 'Not found' },
+          '409': { description: 'Invalid state transition, or the reminder is being delivered right now' },
+          '422': { description: 'Unschedulable time' },
+        },
+      },
+      delete: {
+        summary: 'Cancel Reminder',
+        description: 'Cancels a scheduled or failed reminder. The record is kept with status cancelled.',
+        tags: ['Reminders'],
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Cancelled' }, '404': { description: 'Not found' }, '409': { description: 'Already sent/cancelled/completed or being delivered' } },
+      },
+    },
     '/api/agent/tasks': {
       post: {
         summary: 'Create Agent Task',

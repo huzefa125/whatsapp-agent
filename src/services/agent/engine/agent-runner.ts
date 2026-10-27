@@ -87,6 +87,8 @@ export interface RunnerDeps {
   registry: ToolRegistry;
   permissions: PermissionResolver;
   getProvider: () => AiProvider;
+  /** Extra per-user system-prompt text (e.g. the user's current local time). Rebuilt on every model call. */
+  systemContext?: (userId: string) => Promise<string | null>;
   config?: Partial<RunnerConfig>;
 }
 
@@ -105,6 +107,19 @@ interface PendingCall {
   id: string;
   name: string;
   rawArguments: string;
+  providerMetadata?: unknown;
+}
+
+const MAX_PROVIDER_METADATA_CHARS = 8192;
+
+/** Opaque provider data (e.g. Gemini thought signatures) is kept only if small and serializable. */
+function boundedProviderMetadata(value: unknown): { providerMetadata?: unknown } {
+  if (value === undefined || value === null) return {};
+  try {
+    return JSON.stringify(value).length <= MAX_PROVIDER_METADATA_CHARS ? { providerMetadata: value } : {};
+  } catch {
+    return {};
+  }
 }
 
 export class AgentRunner {
@@ -206,7 +221,10 @@ export class AgentRunner {
       }
 
       const rounds = countToolRounds(transcript);
-      const completion = await this.callModel(ctx, provider, toProviderMessages(TOOL_USE_SYSTEM_PROMPT, transcript), specs);
+      const extraContext = (await this.deps.systemContext?.(task.userId)) ?? null;
+      const systemPrompt = extraContext ? `${TOOL_USE_SYSTEM_PROMPT}
+${extraContext}` : TOOL_USE_SYSTEM_PROMPT;
+      const completion = await this.callModel(ctx, provider, toProviderMessages(systemPrompt, transcript), specs);
       ctx.stats.model = completion.model;
       ctx.stats.promptTokens += completion.usage?.promptTokens ?? 0;
       ctx.stats.completionTokens += completion.usage?.completionTokens ?? 0;
@@ -239,6 +257,7 @@ export class AgentRunner {
           typeof tc.rawArguments === 'string' && tc.rawArguments.length <= MAX_RAW_ARGUMENT_CHARS
             ? tc.rawArguments
             : '__invalid__',
+        ...boundedProviderMetadata(tc.providerMetadata),
       }));
       transcript.push({
         role: 'assistant',
@@ -407,7 +426,9 @@ export class AgentRunner {
       return reject('NOT_AUTHORIZED', 'You do not have permission to use this tool.');
     }
 
-    if (tool.requiresConfirmation) {
+    const needsConfirmation =
+      tool.requiresConfirmation || (tool.shouldConfirm ? await tool.shouldConfirm(parsed.data, { userId: task.userId }) : false);
+    if (needsConfirmation) {
       const created = await repo.insertToolCall({
         taskId: task.id,
         callId: call.id,
@@ -505,7 +526,7 @@ export class AgentRunner {
     let summary = tool.name;
     try {
       const parsed = tool.inputSchema.safeParse(args);
-      if (tool.describeCall && parsed.success) summary = tool.describeCall(parsed.data);
+      if (tool.describeCall && parsed.success) summary = await tool.describeCall(parsed.data, { userId: ctx.task.userId });
     } catch {
       summary = tool.name;
     }
@@ -572,7 +593,11 @@ export class AgentRunner {
       }
 
       if (info.retryable && task.attempts < task.maxAttempts) {
-        const delay = Math.min(60_000, this.cfg.retryBackoffBaseMs * 4 ** (task.attempts - 1));
+        let delay = Math.min(60_000, this.cfg.retryBackoffBaseMs * 4 ** (task.attempts - 1));
+        if (info.code === 'AI_RATE_LIMITED') {
+          // Provider quotas reset per minute (or per day), so retrying within seconds only burns attempts.
+          delay = Math.max(delay, this.cfg.retryBackoffBaseMs * 15 * task.attempts);
+        }
         const outcome = await repo.scheduleRetry(
           task.id,
           executionId,

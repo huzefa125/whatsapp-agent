@@ -49,6 +49,12 @@ export interface ModelToolCall {
   id: string;
   name: string;
   rawArguments: string;
+  /**
+   * Opaque provider data that must be sent back with this call on the next request
+   * (e.g. Gemini 3 `extra_content.google.thought_signature`, without which the follow-up request is
+   * rejected). Never interpreted or trusted by the engine; size-capped before it is stored.
+   */
+  providerMetadata?: unknown;
 }
 
 export type ToolChatMessage =

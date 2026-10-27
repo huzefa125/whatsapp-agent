@@ -44,6 +44,34 @@ describe('OpenAiCompatibleProvider.generateWithTools (mocked client; no network)
     expect(body.messages[3]).toEqual({ role: 'tool', tool_call_id: 'call_1_1', content: '{"ok":true}' });
   });
 
+  it('captures Gemini extra_content from tool calls and sends it back verbatim on the next request', async () => {
+    const extra = { google: { thought_signature: 'sig-xyz' } };
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce(
+        completion({
+          content: null,
+          tool_calls: [{ id: 'c1', type: 'function', function: { name: 'calculator', arguments: '{}' }, extra_content: extra }],
+        })
+      )
+      .mockResolvedValueOnce(completion({ content: 'done' }));
+    const provider = providerWith(create);
+    const first = await provider.generateWithTools([{ role: 'user', content: 'q' }], tools);
+    expect(first).toMatchObject({ kind: 'tool_calls', toolCalls: [{ providerMetadata: extra }] });
+    if (first.kind !== 'tool_calls') throw new Error('unreachable');
+
+    await provider.generateWithTools(
+      [
+        { role: 'user', content: 'q' },
+        { role: 'assistant', content: null, toolCalls: first.toolCalls },
+        { role: 'tool', toolCallId: 'c1', name: 'calculator', content: '{"ok":true}' },
+      ],
+      tools
+    );
+    const sent = create.mock.calls[1]![0].messages[1].tool_calls[0];
+    expect(sent.extra_content).toEqual(extra);
+  });
+
   it('omits the tools parameter entirely when none are available', async () => {
     const create = vi.fn().mockResolvedValue(completion({ content: 'ok' }));
     await providerWith(create).generateWithTools([{ role: 'user', content: 'q' }], []);

@@ -1,5 +1,5 @@
-import { pgTable, uuid, varchar, text, timestamp, jsonb, integer, boolean, index, uniqueIndex } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { pgTable, uuid, varchar, text, timestamp, jsonb, integer, boolean, index, uniqueIndex, check } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
 
 /**
  * Users table: stores user identity identified by their WhatsApp phone number and verified email.
@@ -13,6 +13,8 @@ export const users = pgTable(
     displayName: varchar('display_name', { length: 255 }),
     phoneVerifiedAt: timestamp('phone_verified_at', { withTimezone: true }),
     emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
+    // IANA timezone (e.g. Asia/Kolkata) used to interpret and display the user's dates and times.
+    timezone: varchar('timezone', { length: 64 }),
     metadata: jsonb('metadata').default({}).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -281,6 +283,58 @@ export const agentToolCalls = pgTable(
   (table) => [uniqueIndex('agent_tool_calls_task_call_idx').on(table.taskId, table.callId)]
 );
 
+/**
+ * Reminders table: one-time reminders delivered by the durable reminder worker.
+ * The table itself is the schedule: `next_attempt_at` is what the worker claims against.
+ * `status`: scheduled | processing | sent (provider ACCEPTED it; see delivered_at for confirmed delivery)
+ *           | failed | cancelled | completed (user marked done)
+ */
+export const reminders = pgTable(
+  'reminders',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    remindAt: timestamp('remind_at', { withTimezone: true }).notNull(),
+    // Snapshot of the user's IANA timezone when scheduled; used for display and re-interpretation.
+    timezone: varchar('timezone', { length: 64 }).notNull(),
+    status: varchar('status', { length: 16 }).default('scheduled').notNull(),
+    // Earliest time the worker may claim it. Always >= remind_at (enforced by a CHECK), so a
+    // reminder can never be claimed before its scheduled instant.
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull(),
+    attempts: integer('attempts').default(0).notNull(),
+    maxAttempts: integer('max_attempts').default(5).notNull(),
+    lockedBy: uuid('locked_by'),
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+    lastErrorCode: varchar('last_error_code', { length: 64 }),
+    lastErrorMessage: text('last_error_message'),
+    deliveryProvider: varchar('delivery_provider', { length: 16 }), // 'whatsapp' | 'mock'
+    providerMessageId: varchar('provider_message_id', { length: 255 }),
+    acceptedAt: timestamp('accepted_at', { withTimezone: true }), // provider accepted the send request
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }), // provider confirmed delivery (webhook)
+    idempotencyKey: varchar('idempotency_key', { length: 128 }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('reminders_due_idx').on(table.status, table.nextAttemptAt),
+    index('reminders_user_status_remind_idx').on(table.userId, table.status, table.remindAt),
+    index('reminders_provider_message_idx').on(table.providerMessageId),
+    uniqueIndex('reminders_user_idempotency_idx').on(table.userId, table.idempotencyKey),
+    check(
+      'reminders_status_chk',
+      sql`${table.status} in ('scheduled','processing','sent','failed','cancelled','completed')`
+    ),
+    check('reminders_title_len_chk', sql`char_length(${table.title}) between 1 and 1000`),
+    check('reminders_attempts_chk', sql`${table.attempts} >= 0 and ${table.maxAttempts} >= 1`),
+    check('reminders_never_early_chk', sql`${table.nextAttemptAt} >= ${table.remindAt}`),
+  ]
+);
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   conversations: many(conversations),
@@ -362,3 +416,6 @@ export type NewAgentTaskAttempt = typeof agentTaskAttempts.$inferInsert;
 
 export type AgentToolCall = typeof agentToolCalls.$inferSelect;
 export type NewAgentToolCall = typeof agentToolCalls.$inferInsert;
+
+export type Reminder = typeof reminders.$inferSelect;
+export type NewReminder = typeof reminders.$inferInsert;
