@@ -190,6 +190,97 @@ export const outboxJobs = pgTable(
   ]
 );
 
+/**
+ * Agent Tasks table: durable unit of work executed by the agent engine.
+ * Status transitions are enforced in code (see services/agent/engine/task-state.ts) and guarded
+ * in SQL by fenced updates (`locked_by`) so a stale worker cannot overwrite a newer owner.
+ */
+export const agentTasks = pgTable(
+  'agent_tasks',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
+    taskType: varchar('task_type', { length: 64 }).notNull(),
+    input: jsonb('input').notNull(),
+    // 'pending' | 'running' | 'awaiting_confirmation' | 'succeeded' | 'failed' | 'cancelled'
+    status: varchar('status', { length: 32 }).default('pending').notNull(),
+    attempts: integer('attempts').default(0).notNull(),
+    maxAttempts: integer('max_attempts').default(3).notNull(),
+    idempotencyKey: varchar('idempotency_key', { length: 128 }),
+    // Provider-agnostic model transcript checkpoint (system prompt excluded). Sanitized tool results only.
+    transcript: jsonb('transcript'),
+    result: jsonb('result'),
+    errorCode: varchar('error_code', { length: 64 }),
+    errorMessage: text('error_message'),
+    lockedBy: uuid('locked_by'),
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+    runAfter: timestamp('run_after', { withTimezone: true }).defaultNow().notNull(),
+    cancelRequestedAt: timestamp('cancel_requested_at', { withTimezone: true }),
+    confirmationExpiresAt: timestamp('confirmation_expires_at', { withTimezone: true }),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('agent_tasks_user_created_idx').on(table.userId, table.createdAt),
+    index('agent_tasks_status_run_after_idx').on(table.status, table.runAfter),
+    uniqueIndex('agent_tasks_user_idempotency_idx').on(table.userId, table.idempotencyKey),
+  ]
+);
+
+/**
+ * Agent Task Attempts table: one row per execution attempt (claim) of a task.
+ * `id` doubles as the execution correlation ID used in logs and as the lease fencing token.
+ */
+export const agentTaskAttempts = pgTable(
+  'agent_task_attempts',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => agentTasks.id, { onDelete: 'cascade' }),
+    attemptNumber: integer('attempt_number').notNull(),
+    // 'running' | 'succeeded' | 'failed' | 'retry_scheduled' | 'awaiting_confirmation' | 'cancelled' | 'interrupted'
+    status: varchar('status', { length: 32 }).default('running').notNull(),
+    errorCode: varchar('error_code', { length: 64 }),
+    errorMessage: text('error_message'),
+    metadata: jsonb('metadata').default({}).notNull(),
+    startedAt: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (table) => [uniqueIndex('agent_task_attempts_task_attempt_idx').on(table.taskId, table.attemptNumber)]
+);
+
+/**
+ * Agent Tool Calls table: ledger of every tool invocation requested by the model.
+ * The (task_id, call_id) key makes side-effecting tools exactly-once-per-call across retries/restarts.
+ */
+export const agentToolCalls = pgTable(
+  'agent_tool_calls',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => agentTasks.id, { onDelete: 'cascade' }),
+    // Engine-assigned deterministic ID (call_<round>_<index>); never the provider's ID.
+    callId: varchar('call_id', { length: 64 }).notNull(),
+    toolName: varchar('tool_name', { length: 128 }).notNull(),
+    args: jsonb('args').notNull(),
+    // 'awaiting_confirmation' | 'approved' | 'rejected' | 'running' | 'succeeded' | 'failed'
+    status: varchar('status', { length: 32 }).notNull(),
+    // Sanitized, model-visible result string. `text` (not jsonb) so JSON text is stored verbatim.
+    result: text('result'),
+    errorCode: varchar('error_code', { length: 64 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex('agent_tool_calls_task_call_idx').on(table.taskId, table.callId)]
+);
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   conversations: many(conversations),
@@ -262,3 +353,12 @@ export type NewWebhookEvent = typeof webhookEvents.$inferInsert;
 
 export type OutboxJob = typeof outboxJobs.$inferSelect;
 export type NewOutboxJob = typeof outboxJobs.$inferInsert;
+
+export type AgentTask = typeof agentTasks.$inferSelect;
+export type NewAgentTask = typeof agentTasks.$inferInsert;
+
+export type AgentTaskAttempt = typeof agentTaskAttempts.$inferSelect;
+export type NewAgentTaskAttempt = typeof agentTaskAttempts.$inferInsert;
+
+export type AgentToolCall = typeof agentToolCalls.$inferSelect;
+export type NewAgentToolCall = typeof agentToolCalls.$inferInsert;

@@ -29,4 +29,39 @@ export interface AiResponse {
 export interface AiProvider {
   readonly name: string;
   generateResponse(messages: ChatMessage[], options?: AiCompletionOptions): Promise<AiResponse>;
+  /** Optional tool-calling completion. Providers without function-calling support omit this. */
+  generateWithTools?(
+    messages: ToolChatMessage[],
+    tools: ToolSpec[],
+    options?: AiCompletionOptions
+  ): Promise<ToolCompletion>;
 }
+
+/** Provider-facing declaration of a callable function (JSON Schema parameters). */
+export interface ToolSpec {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+/** A tool call as returned by the model. `rawArguments` is UNTRUSTED, unparsed model output. */
+export interface ModelToolCall {
+  id: string;
+  name: string;
+  rawArguments: string;
+}
+
+export type ToolChatMessage =
+  | { role: 'system'; content: string }
+  | { role: 'user'; content: string }
+  | { role: 'assistant'; content: string | null; toolCalls?: ModelToolCall[] }
+  | { role: 'tool'; toolCallId: string; name: string; content: string };
+
+export type ToolCompletion = {
+  model: string;
+  usage?: AiUsage;
+  finishReason?: string;
+} & (
+  | { kind: 'text'; content: string }
+  | { kind: 'tool_calls'; content: string | null; toolCalls: ModelToolCall[] }
+);

@@ -185,5 +185,108 @@ npm run typecheck
 - **Idempotency Gate**: Deduplication checks both the `providerEventId` in `webhook_events` and `providerMessageId` in `messages` to prevent duplicate AI responses on retries or replay attacks.
 - **Durable Outbox Queue**: Failed outgoing operations retry up to 3 times with exponential backoff before being safely marked `dead_letter` for operator inspection.
 - **Graceful Shutdown**: Intercepts `SIGTERM` and `SIGINT`, drains in-flight HTTP requests, halts the outbox poller, and cleanly closes PostgreSQL connections.
+
+---
+
+## 8. Agent Task Engine
+
+A reusable, durable, tool-using agent runtime in `src/services/agent/engine/`. Integrations (reminders, Gmail, Calendar, ...) plug in by registering tools; they never touch the loop.
+
+> The existing WhatsApp reply path (`AgentOrchestrator` + outbox) is **not** routed through this engine yet.
+
+### 8.1 How a task runs
+
+1. `POST /api/agent/tasks` stores a `pending` task (and the user message, if a `conversationId` is given) and returns `202`.
+2. A worker claims it atomically (`FOR UPDATE SKIP LOCKED`), takes a time-limited lease, and loops: **model call → validate every tool call → authorize → execute → sanitized result back to the model → final text**.
+3. The transcript and every tool call are checkpointed in PostgreSQL after each step, so a restart resumes instead of starting over.
+4. The final answer (and assistant message, if there is a conversation) is committed in one transaction.
+
+Only the database is the source of truth; no in-memory queue or timer holds task state.
+
+### 8.2 Task states
+
+| State | Meaning | Moves to |
+|---|---|---|
+| `pending` | Waiting for a worker (`run_after` is the retry/backoff time) | `running`, `cancelled` |
+| `running` | Claimed; owned by one execution (the *lease*) | `succeeded`, `failed`, `cancelled`, `pending` (transient failure or lease recovery), `awaiting_confirmation` |
+| `awaiting_confirmation` | A tool needs the user's approval; nothing has been executed | `pending` (approved **or** rejected), `cancelled` (user cancel or expiry), `failed` |
+| `succeeded` / `failed` / `cancelled` | Terminal | none |
+
+Waiting for a human does not consume the retry budget (`AGENT_MAX_ATTEMPTS`).
+
+### 8.3 API (all require `Authorization: Bearer <session>`)
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/api/agent/tasks` | `{ request, conversationId?, idempotencyKey? }` (or `Idempotency-Key` header). `202` new, `200` replay, `409` key reused with a different request |
+| `GET` | `/api/agent/tasks` | `?status=&limit=&offset=`, newest first, caller's tasks only |
+| `GET` | `/api/agent/tasks/:id` | Status, result/error, `pendingConfirmation` |
+| `POST` | `/api/agent/tasks/:id/cancel` | Immediate for `pending`/`awaiting_confirmation`; cooperative for `running`; `409` if finished |
+| `POST` | `/api/agent/tasks/:id/confirm` | `{ callId, decision: "approve" \| "reject" }` |
+
+Another user's task or conversation always returns `404`.
+
+### 8.4 Adding a tool
+
+```ts
+import { z } from 'zod';
+import { ToolDefinition, ToolError, TransientToolError } from './services/agent/engine';
+
+const input = z.object({ title: z.string().min(1).max(200), at: z.string().datetime() }).strict();
+
+export const createReminderTool: ToolDefinition<z.infer<typeof input>, { id: string }> = {
+  name: 'create_reminder',                       // stable snake_case; persisted in transcripts
+  description: 'Creates a reminder for the user at a given time.',
+  inputSchema: input,                            // also becomes the JSON Schema shown to the model
+  permissions: ['reminders:write'],              // user must hold ALL of these
+  sideEffect: 'idempotent',                      // 'none' | 'idempotent' | 'non_idempotent'
+  requiresConfirmation: false,                   // REQUIRED true when sideEffect is 'non_idempotent'
+  timeoutMs: 5000,
+  retry: { maxRetries: 2, backoffMs: 500 },      // only TransientToolError is retried; never for non_idempotent
+  describeCall: (i) => `Remind you "${i.title}" at ${i.at}`, // shown to the user on confirmation
+  async execute(args, ctx) {
+    // ctx.userId is trusted; ctx.idempotencyKey is stable per call — pass it to the external API.
+    // Throw ToolError(code, message) for expected failures (the message is shown to the model).
+    // Throw TransientToolError for retryable ones. Anything else is logged and hidden.
+    return { id: await reminders.create(ctx.userId, args, ctx.idempotencyKey) };
+  },
+};
+```
+
+Register it in `createDefaultToolRegistry()` (`engine/task-service.ts`) with `.register(createReminderTool)`, and grant the permission to users (see 8.5). The registry rejects duplicate names, tools without permissions, and non-idempotent tools that skip confirmation or allow retries.
+
+Rules the engine enforces **regardless of what the model says**: unknown tools and invalid arguments are rejected without execution; permissions are checked from server-side grants at execution time (and the model is only shown tools the user may call); confirmation-required tools never run until the authenticated user approves the exact arguments displayed; a call recorded as finished is never executed twice; a non-idempotent call interrupted mid-flight fails the task (`OUTCOME_UNKNOWN`) instead of being replayed.
+
+### 8.5 Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AGENT_WORKER_ENABLED` | `true` | Run the worker in this process (multiple instances are safe) |
+| `AGENT_POLL_INTERVAL_MS` | `2000` | Worker poll interval |
+| `AGENT_MAX_TOOL_ROUNDS` | `5` | Model-requested tool rounds before the task fails |
+| `AGENT_MAX_TOOL_CALLS_PER_ROUND` | `4` | Calls the model may request at once |
+| `AGENT_MODEL_TIMEOUT_MS` | `30000` | Per model call |
+| `AGENT_TASK_TIMEOUT_MS` | `120000` | Whole execution attempt |
+| `AGENT_MAX_TOOL_OUTPUT_CHARS` | `4000` | Cap on tool output shown to the model (per-tool override available) |
+| `AGENT_MAX_REQUEST_CHARS` / `AGENT_MAX_RESPONSE_CHARS` | `4000` | Request and final-answer caps |
+| `AGENT_MAX_ATTEMPTS` | `3` | Executions per task (transient provider errors, lease recovery) |
+| `AGENT_LEASE_SECONDS` | `60` | Worker lease; stale tasks are requeued after it expires |
+| `AGENT_HISTORY_LIMIT` | `20` | Recent conversation turns given to the model |
+| `AGENT_CONFIRMATION_TTL_MINUTES` | `30` | Unanswered confirmations are cancelled after this |
+| `AGENT_DEFAULT_PERMISSIONS` | `utility:read` | Permissions of every fully verified user. There is no per-user grant table yet; implement `PermissionResolver` to add one |
+
+The model must be served through an `AiProvider` that implements `generateWithTools` (OpenAI-compatible providers, including the Gemini endpoint, do; the stub answers without tools).
+
+### 8.6 Testing the engine
+
+`npm test` runs everything. DB-backed engine tests need a **dedicated** PostgreSQL database whose name contains `test` (they truncate the agent tables) and are skipped otherwise:
+
+```bash
+TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/whatsapp_test \
+DATABASE_URL=$TEST_DATABASE_URL NODE_ENV=test npx tsx src/db/migrate.ts
+TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/whatsapp_test npm test
+```
+
+The model is always mocked; no paid API calls are made.
 #   w h a t s a p p - a g e n t  
  

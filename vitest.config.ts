@@ -6,6 +6,8 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    // DB-backed tests share one database and workers claim tasks globally, so files run serially.
+    fileParallelism: false,
     testTimeout: 10000,
     hookTimeout: 10000,
     coverage: {

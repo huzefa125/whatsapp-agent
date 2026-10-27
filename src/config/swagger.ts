@@ -285,6 +285,112 @@ export const swaggerDocument = {
         },
       },
     },
+    '/api/agent/tasks': {
+      post: {
+        summary: 'Create Agent Task',
+        description:
+          'Queues a request for the tool-using agent engine and returns immediately (202). Poll GET /api/agent/tasks/{id}. Identity comes from the Bearer session only. Supply an Idempotency-Key header (or idempotencyKey field) to make retries safe: a replay returns 200 with the original task, reuse with a different request returns 409.',
+        tags: ['Agent Tasks'],
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          { name: 'Idempotency-Key', in: 'header', required: false, schema: { type: 'string', maxLength: 128 } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['request'],
+                properties: {
+                  request: { type: 'string', example: 'What is 17.5% of 2480?', description: 'Max AGENT_MAX_REQUEST_CHARS (default 4000)' },
+                  conversationId: { type: 'string', format: 'uuid', description: 'Optional. Must belong to the caller.' },
+                  idempotencyKey: { type: 'string', maxLength: 128 },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '202': { description: 'Task accepted' },
+          '200': { description: 'Idempotent replay of an existing task' },
+          '400': { description: 'Validation error' },
+          '401': { description: 'Unauthorized' },
+          '404': { description: 'conversationId not found for this user' },
+          '409': { description: 'Idempotency key reused with a different request' },
+        },
+      },
+      get: {
+        summary: 'List My Agent Tasks',
+        description: 'Newest first. Only tasks owned by the caller are ever returned.',
+        tags: ['Agent Tasks'],
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          {
+            name: 'status',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', enum: ['pending', 'running', 'awaiting_confirmation', 'succeeded', 'failed', 'cancelled'] },
+          },
+          { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+          { name: 'offset', in: 'query', required: false, schema: { type: 'integer', minimum: 0, default: 0 } },
+        ],
+        responses: { '200': { description: 'Tasks' }, '400': { description: 'Validation error' }, '401': { description: 'Unauthorized' } },
+      },
+    },
+    '/api/agent/tasks/{id}': {
+      get: {
+        summary: 'Get Agent Task',
+        description:
+          'Returns status, sanitized result or error, and, while status is awaiting_confirmation, pendingConfirmation { callId, toolName, summary, arguments }.',
+        tags: ['Agent Tasks'],
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Task' }, '401': { description: 'Unauthorized' }, '404': { description: 'Not found (or not yours)' } },
+      },
+    },
+    '/api/agent/tasks/{id}/cancel': {
+      post: {
+        summary: 'Cancel Agent Task',
+        description:
+          'pending / awaiting_confirmation tasks are cancelled immediately. A running task gets cancelRequested=true and stops at its next checkpoint. Finished tasks return 409.',
+        tags: ['Agent Tasks'],
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Task after cancellation' }, '404': { description: 'Not found' }, '409': { description: 'Task already finished' } },
+      },
+    },
+    '/api/agent/tasks/{id}/confirm': {
+      post: {
+        summary: 'Approve or Reject a Pending Action',
+        description:
+          'Resolves exactly one pending tool call. Approval runs exactly the arguments shown in pendingConfirmation. Rejection tells the model the user declined.',
+        tags: ['Agent Tasks'],
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['callId', 'decision'],
+                properties: {
+                  callId: { type: 'string', example: 'call_1_1' },
+                  decision: { type: 'string', enum: ['approve', 'reject'] },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Decision recorded; task re-queued' },
+          '400': { description: 'Validation error' },
+          '404': { description: 'Task or pending call not found' },
+          '409': { description: 'Task is not awaiting confirmation, or the request expired' },
+        },
+      },
+    },
     '/webhook': {
       get: {
         summary: 'Meta Webhook Challenge Verification',

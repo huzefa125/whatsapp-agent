@@ -29,6 +29,26 @@ const envSchema = z.object({
   AI_MAX_TOKENS: z.coerce.number().int().positive().default(1000),
   AI_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.7),
 
+  // Agent Task Engine
+  AGENT_WORKER_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  AGENT_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(2000),
+  AGENT_MAX_TOOL_ROUNDS: z.coerce.number().int().min(1).max(20).default(5),
+  AGENT_MAX_TOOL_CALLS_PER_ROUND: z.coerce.number().int().min(1).max(10).default(4),
+  AGENT_MODEL_TIMEOUT_MS: z.coerce.number().int().min(1000).default(30000),
+  AGENT_TASK_TIMEOUT_MS: z.coerce.number().int().min(1000).default(120000),
+  AGENT_MAX_TOOL_OUTPUT_CHARS: z.coerce.number().int().min(100).default(4000),
+  AGENT_MAX_REQUEST_CHARS: z.coerce.number().int().min(1).default(4000),
+  AGENT_MAX_RESPONSE_CHARS: z.coerce.number().int().min(100).default(4000),
+  AGENT_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
+  AGENT_LEASE_SECONDS: z.coerce.number().int().min(5).default(60),
+  AGENT_HISTORY_LIMIT: z.coerce.number().int().min(0).max(100).default(20),
+  AGENT_CONFIRMATION_TTL_MINUTES: z.coerce.number().int().min(1).default(30),
+  // Comma-separated permissions granted to every fully verified user (no per-user grants yet).
+  AGENT_DEFAULT_PERMISSIONS: z.string().default('utility:read'),
+
   // Security & Rate Limiting
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(900000),
   RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),

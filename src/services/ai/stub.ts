@@ -1,4 +1,12 @@
-import { AiProvider, ChatMessage, AiCompletionOptions, AiResponse } from './types';
+import {
+  AiProvider,
+  ChatMessage,
+  AiCompletionOptions,
+  AiResponse,
+  ToolChatMessage,
+  ToolSpec,
+  ToolCompletion,
+} from './types';
 import { logger } from '../../utils/logger';
 
 export class StubAiProvider implements AiProvider {
@@ -45,5 +53,20 @@ export class StubAiProvider implements AiProvider {
       },
       finishReason: 'stop',
     };
+  }
+
+  /** Offline tool-calling stand-in: never requests tools, answers in plain text. */
+  async generateWithTools(
+    messages: ToolChatMessage[],
+    _tools: ToolSpec[],
+    options?: AiCompletionOptions
+  ): Promise<ToolCompletion> {
+    const plain: ChatMessage[] = messages.flatMap((m): ChatMessage[] =>
+      m.role === 'user' || m.role === 'system' || (m.role === 'assistant' && m.content)
+        ? [{ role: m.role, content: m.content ?? '' }]
+        : []
+    );
+    const res = await this.generateResponse(plain, options);
+    return { kind: 'text', content: res.content, model: res.model, usage: res.usage, finishReason: 'stop' };
   }
 }

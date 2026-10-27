@@ -3,6 +3,7 @@ import { createApp } from './app';
 import { getConfig, getSafeConfig } from './config/env';
 import { checkDatabaseConnection, closeDatabaseConnection } from './db/client';
 import { getOutboxService } from './services/queue/outbox';
+import { getAgentTaskService } from './services/agent/engine/task-service';
 import { logger } from './utils/logger';
 
 export async function startServer(): Promise<http.Server> {
@@ -28,6 +29,14 @@ export async function startServer(): Promise<http.Server> {
   // Start background outbox queue worker
   const outboxService = getOutboxService();
   outboxService.startWorker();
+
+  // Start durable agent task worker (leases + SKIP LOCKED make multiple instances safe)
+  const agentTasks = getAgentTaskService();
+  if (config.AGENT_WORKER_ENABLED) {
+    agentTasks.startWorker();
+  } else {
+    logger.info('Agent task worker disabled via AGENT_WORKER_ENABLED=false');
+  }
 
   const app = createApp();
   const server = http.createServer(app);
@@ -58,6 +67,7 @@ export async function startServer(): Promise<http.Server> {
     try {
       // 1. Stop background worker
       outboxService.stopWorker();
+      await agentTasks.stopWorker();
 
       // 2. Close HTTP server
       await new Promise<void>((resolve, reject) => {
