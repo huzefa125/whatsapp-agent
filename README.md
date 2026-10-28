@@ -110,9 +110,10 @@ docker compose up -d
 
 ### 4.5 Run Database Migrations
 ```bash
-npm run db:generate
-npm run db:migrate
+npm run db:migrate        # development (tsx)
+npm run build && npm run db:migrate:prod   # production build (node dist/db/migrate.js)
 ```
+Migrations are never run automatically at startup. Run them as a single deploy step **before** starting the new version, from any directory (the folder is resolved relative to the code). They are applied in one transaction each, so a failed migration leaves the database unchanged, and re-running is a no-op. Use `npm run db:generate` only when you change `src/db/schema.ts`, and commit the generated SQL.
 
 ### 4.6 Start the Application
 - **Development Mode** (with hot reload):
@@ -192,7 +193,7 @@ npm run typecheck
 
 A reusable, durable, tool-using agent runtime in `src/services/agent/engine/`. Integrations (reminders, Gmail, Calendar, ...) plug in by registering tools; they never touch the loop.
 
-> The existing WhatsApp reply path (`AgentOrchestrator` + outbox) is **not** routed through this engine yet.
+> Inbound WhatsApp messages run through this engine (see section 10). The old `AgentOrchestrator` is no longer used by the webhook path.
 
 ### 8.1 How a task runs
 
@@ -296,7 +297,7 @@ The model is always mocked; no paid API calls are made.
 
 One-time reminders, created through the REST API or by the agent (registered as tools in the Agent Task Engine), stored in PostgreSQL and delivered by a durable worker over the WhatsApp Business Platform.
 
-> **Not wired yet:** inbound WhatsApp chat messages still go through the original reply path, not the agent engine. Reminders are reachable via `POST /api/reminders` and via `POST /api/agent/tasks`; routing WhatsApp conversations into the engine is a separate step.
+> Reminders are reachable from WhatsApp chat (section 10), `POST /api/reminders` and `POST /api/agent/tasks`.
 
 ### 9.1 Using it
 
@@ -342,7 +343,7 @@ Delivery is reported separately in `delivery.state`: `not_sent` → `accepted_by
 
 ### 9.5 Agent tools
 
-`create_reminder`, `list_reminders`, `reschedule_reminder`, `cancel_reminder`, `complete_reminder`, registered in `createDefaultToolRegistry()`. Identity is the authenticated task owner; the tools have no user argument. Permissions: `reminders:read` / `reminders:write` (granted via `AGENT_DEFAULT_PERMISSIONS`). Each task's system prompt includes the user's current local time and timezone so "tomorrow" resolves correctly, and instructs the model to ask rather than guess. Reminders at 00:00–04:59 local or more than `REMINDER_CONFIRM_BEYOND_DAYS` ahead require the user's explicit confirmation (`POST /api/agent/tasks/:id/confirm`) before anything is written. Replayed tool calls and retried inbound messages (reuse the same task `idempotencyKey`, e.g. `wa:<wamid>`) never create a second reminder.
+`create_reminder`, `list_reminders`, `reschedule_reminder`, `cancel_reminder`, `complete_reminder`, `set_timezone`, registered in `createDefaultToolRegistry()`. Identity is the authenticated task owner; the tools have no user argument. Permissions: `reminders:read` / `reminders:write` (granted via `AGENT_DEFAULT_PERMISSIONS`). Each task's system prompt includes the user's current local time and timezone so "tomorrow" resolves correctly, and instructs the model to ask rather than guess. Reminders at 00:00–04:59 local or more than `REMINDER_CONFIRM_BEYOND_DAYS` ahead require the user's explicit confirmation (`POST /api/agent/tasks/:id/confirm`) before anything is written. Replayed tool calls and retried inbound messages (reuse the same task `idempotencyKey`, e.g. `wa:<wamid>`) never create a second reminder.
 
 ### 9.6 Running the worker
 
@@ -363,3 +364,28 @@ It runs inside the server process (`npm run dev` / `npm start`) when `REMINDER_W
 | `WHATSAPP_REMINDER_TEMPLATE_NAME` / `_LANG` | unset / `en` | Approved template for out-of-window delivery |
 
 Reminder code never logs the reminder text; its log lines carry `reminderId`, `executionId` and attempt number only, and the HTTP logger does not log request bodies. The one exception to be aware of: unexpected exceptions are logged with their stack, and a third-party error message could in principle embed text.
+
+---
+
+## 10. WhatsApp Chat Channel
+
+Inbound WhatsApp text → `POST /webhook` (signature verified) → durable `webhook_events` + `outbox_jobs` (one transaction) → `WhatsAppChannel` → an `agent_tasks` row (`channel='whatsapp'`, idempotency key `wa:<wamid>`) → the Agent Task Engine (Gemini + tools) → `WhatsAppReplyDispatcher` sends the outcome back.
+
+- **Who can talk to the agent:** only users who completed dual-channel registration (`/api/auth/*`). Any other number gets one fixed "please sign up" message; no model call, no account is created.
+- **Conversation:** one active conversation per user; the last `AGENT_HISTORY_LIMIT` turns are given to the model, so follow-ups work. The model asks a clarifying question as a normal reply.
+- **Confirmations:** risky actions (reminders at 00:00-04:59 local or > `REMINDER_CONFIRM_BEYOND_DAYS` away) pause the task and the user gets "Please confirm: ... Reply YES or NO". Only a whole-message YES/NO answers it; anything else gets a re-prompt. Unanswered confirmations are cancelled after `AGENT_CONFIRMATION_TTL_MINUTES` and the user is told.
+- **Cancel:** sending just `cancel` or `stop` cancels the request being worked on.
+- **Timezone:** the agent asks for it once and saves it with `set_timezone`.
+- **Replies are durable:** the task row records which outcome was last announced (`reply_key`). Failed sends back off 5 s, 20 s, 80 s, ... up to `5` attempts; permanent errors (invalid number) stop immediately. Delivery is at-least-once.
+- **24h window:** each inbound message is stored with its WhatsApp message id, which is what opens the window for free-text reminders. Outside it, reminders need the approved template (section 9.4).
+- **Known limits:** two messages sent in quick succession run as two independent tasks (the second may not see the first's answer). Only text is handled; media gets no reply. Free-text only: no WhatsApp interactive buttons.
+
+### Go-live checklist (external setup)
+
+1. PostgreSQL that persists (managed DB or `docker compose up -d` with its volume) → set `DATABASE_URL`, run `npm run db:migrate:prod`.
+2. `NODE_ENV=production`, real `WHATSAPP_APP_SECRET`, `WHATSAPP_ACCESS_TOKEN` (permanent system-user token), `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, `AI_API_KEY`; `REMINDER_PROVIDER=whatsapp`.
+3. Public HTTPS URL for `/webhook`; subscribe the app to the `messages` field.
+4. Create and get approved a WhatsApp template with one body variable, set `WHATSAPP_REMINDER_TEMPLATE_NAME` / `_LANG`.
+5. Email OTPs: set `EMAIL_PROVIDER=smtp` and `SMTP_HOST/PORT/USER/PASS/FROM` (the default `stub` sends nothing).
+6. Register your own number through `/api/auth/*`. **Message the business number first** (any text): the phone OTP is sent as free text, which WhatsApp only allows inside the 24-hour window, so a number that has never written to you cannot receive its code. While the Meta app is in development mode, also add your number to the allowed recipients list.
+7. Set your timezone by chatting ("remind me tomorrow at 10", the agent asks) or `PATCH /api/users/me`.

@@ -4,6 +4,7 @@ import { getConfig, getSafeConfig } from './config/env';
 import { checkDatabaseConnection, closeDatabaseConnection } from './db/client';
 import { getOutboxService } from './services/queue/outbox';
 import { getAgentTaskService } from './services/agent/engine/task-service';
+import { getReplyDispatcher } from './services/agent/whatsapp/replies';
 import { getReminderWorker } from './services/reminders/reminder-worker';
 import { resolveProviderKind } from './services/notifications';
 import { logger } from './utils/logger';
@@ -36,6 +37,7 @@ export async function startServer(): Promise<http.Server> {
   const agentTasks = getAgentTaskService();
   if (config.AGENT_WORKER_ENABLED) {
     agentTasks.startWorker();
+    getReplyDispatcher().start();
   } else {
     logger.info('Agent task worker disabled via AGENT_WORKER_ENABLED=false');
   }
@@ -81,6 +83,7 @@ export async function startServer(): Promise<http.Server> {
       // 1. Stop background worker
       outboxService.stopWorker();
       await agentTasks.stopWorker();
+      await getReplyDispatcher().stop();
       await reminderWorker.stop();
 
       // 2. Close HTTP server

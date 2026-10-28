@@ -1,10 +1,12 @@
-import { eq, and, lte, asc } from 'drizzle-orm';
+import { eq, and, lte, lt, asc } from 'drizzle-orm';
 import { getDb } from '../../db/client';
 import { outboxJobs, webhookEvents, NewOutboxJob, OutboxJob } from '../../db/schema';
-import { getAgentOrchestrator } from '../agent/orchestrator';
-import { getWhatsAppClient } from '../whatsapp/client';
+import { getWhatsAppChannel } from '../agent/whatsapp/channel';
 import { ParsedTextMessageEvent } from '../whatsapp/types';
 import { logger } from '../../utils/logger';
+
+/** Far longer than any job runs (it only enqueues work), so a live job is never mistaken for a dead one. */
+const STALE_PROCESSING_MS = 5 * 60_000;
 
 export interface ProcessMessageJobPayload {
   event: ParsedTextMessageEvent;
@@ -13,6 +15,7 @@ export interface ProcessMessageJobPayload {
 export class OutboxService {
   private isProcessing = false;
   private workerInterval: NodeJS.Timeout | null = null;
+  private lastRecovery = 0;
 
   /**
    * Enqueues an incoming WhatsApp message for durable, idempotent processing.
@@ -23,33 +26,38 @@ export class OutboxService {
     const eventId = event.providerMessageId;
 
     try {
-      // 1. Record event in webhook_events table for idempotency
-      const inserted = await db
-        .insert(webhookEvents)
-        .values({
-          providerEventId: eventId,
-          eventType: 'text_message',
-          payload: event as unknown as Record<string, unknown>,
-          status: 'pending',
-        })
-        .onConflictDoNothing()
-        .returning();
+      // One transaction: either the event is recorded AND queued, or neither. Otherwise a crash between the
+      // two inserts would leave the event recorded, make Meta's retry look like a duplicate, and drop the message.
+      const enqueued = await db.transaction(async (tx) => {
+        const inserted = await tx
+          .insert(webhookEvents)
+          .values({
+            providerEventId: eventId,
+            eventType: 'text_message',
+            payload: event as unknown as Record<string, unknown>,
+            status: 'pending',
+          })
+          .onConflictDoNothing()
+          .returning();
 
-      if (inserted.length === 0) {
+        if (inserted.length === 0) return false;
+
+        const job: NewOutboxJob = {
+          jobType: 'process_inbound_message',
+          payload: { event } as unknown as Record<string, unknown>,
+          status: 'pending',
+          attempts: 0,
+          maxAttempts: 3,
+          nextRunAt: new Date(),
+        };
+        await tx.insert(outboxJobs).values(job);
+        return true;
+      });
+
+      if (!enqueued) {
         logger.info({ eventId }, 'Duplicate webhook event received; idempotency gate triggered');
         return false;
       }
-
-      // 2. Enqueue job into outbox_jobs
-      const job: NewOutboxJob = {
-        jobType: 'process_inbound_message',
-        payload: { event } as unknown as Record<string, unknown>,
-        status: 'pending',
-        attempts: 0,
-        maxAttempts: 3,
-        nextRunAt: new Date(),
-      };
-      await db.insert(outboxJobs).values(job);
 
       logger.info({ eventId }, 'Durable outbox job enqueued for message processing');
       return true;
@@ -140,35 +148,35 @@ export class OutboxService {
     if (job.jobType === 'process_inbound_message') {
       const payload = job.payload as unknown as ProcessMessageJobPayload;
       const event = payload.event;
+      // The stored payload is JSON, so the timestamp comes back as a string.
+      event.timestamp = new Date(event.timestamp);
 
-      // 1. Pass to Agent Orchestrator
-      const orchestrator = getAgentOrchestrator();
-      const result = await orchestrator.processTextMessage(event);
+      // Idempotent per WhatsApp message id; the answer is delivered later by the reply dispatcher.
+      await getWhatsAppChannel().handleInbound(event);
 
-      // If duplicate or empty reply, nothing to send
-      if (result.isDuplicate || !result.replyText) {
-        return;
-      }
-
-      // 2. Dispatch response via WhatsApp Client
-      const whatsapp = getWhatsAppClient();
-      await whatsapp.sendTextMessage({
-        to: event.senderPhoneNumber,
-        text: result.replyText,
-      });
-
-      // 3. Mark webhook event processed
-      const db = getDb();
-      await db
+      await getDb()
         .update(webhookEvents)
-        .set({
-          status: 'processed',
-          processedAt: new Date(),
-        })
+        .set({ status: 'processed', processedAt: new Date() })
         .where(eq(webhookEvents.providerEventId, event.providerMessageId));
     } else {
       logger.warn({ jobType: job.jobType }, 'Unknown outbox job type');
     }
+  }
+
+  /**
+   * A job left in `processing` means the process died mid-job. Jobs are idempotent, so put them back in the
+   * queue (the attempt that was in flight already counted toward maxAttempts).
+   */
+  async recoverStaleJobs(staleAfterMs = STALE_PROCESSING_MS): Promise<number> {
+    const db = getDb();
+    const cutoff = new Date(Date.now() - staleAfterMs);
+    const recovered = await db
+      .update(outboxJobs)
+      .set({ status: 'pending', nextRunAt: new Date(), updatedAt: new Date(), lastError: 'Recovered after worker stopped mid-job' })
+      .where(and(eq(outboxJobs.status, 'processing'), lt(outboxJobs.updatedAt, cutoff)))
+      .returning({ id: outboxJobs.id });
+    if (recovered.length > 0) logger.warn({ count: recovered.length }, 'Recovered stale outbox jobs');
+    return recovered.length;
   }
 
   /**
@@ -182,6 +190,10 @@ export class OutboxService {
       if (this.isProcessing) return;
       this.isProcessing = true;
       try {
+        if (Date.now() - this.lastRecovery > 60_000) {
+          this.lastRecovery = Date.now();
+          await this.recoverStaleJobs();
+        }
         let hasMore = true;
         while (hasMore) {
           hasMore = await this.processNextJob();

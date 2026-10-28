@@ -1,3 +1,4 @@
+import path from 'path';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { getDb, closeDatabaseConnection } from './client';
 import { logger } from '../utils/logger';
@@ -6,7 +7,8 @@ export async function runMigrations(): Promise<void> {
   logger.info('Starting database migrations...');
   try {
     const db = getDb();
-    await migrate(db, { migrationsFolder: './drizzle' });
+    // Resolved from this file (src/db or dist/db), not the working directory, so it runs from anywhere.
+    await migrate(db, { migrationsFolder: path.resolve(__dirname, '../../drizzle') });
     logger.info('Database migrations completed successfully');
   } catch (err) {
     logger.error({ err }, 'Database migration failed');

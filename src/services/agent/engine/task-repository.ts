@@ -33,6 +33,10 @@ export interface CreateTaskParams {
   maxAttempts: number;
   /** Persisted to the conversation in the same transaction as the task. */
   userMessage: string | null;
+  /** 'whatsapp' tasks get their outcome pushed back to the user; 'api' callers poll. */
+  channel?: 'api' | 'whatsapp';
+  /** WhatsApp message id (wamid) of the user message; it is what opens the 24h customer-service window. */
+  userMessageProviderId?: string | null;
 }
 
 export interface PendingConfirmation {
@@ -83,6 +87,7 @@ export class AgentTaskRepository {
           input: p.input,
           idempotencyKey: p.idempotencyKey,
           maxAttempts: p.maxAttempts,
+          channel: p.channel ?? 'api',
         })
         .onConflictDoNothing({ target: [agentTasks.userId, agentTasks.idempotencyKey] })
         .returning();
@@ -108,6 +113,7 @@ export class AgentTaskRepository {
           userId: p.userId,
           role: 'user',
           content: p.userMessage,
+          providerMessageId: p.userMessageProviderId ?? null,
           status: 'received',
           metadata: { taskId: inserted.id },
         });
@@ -121,6 +127,19 @@ export class AgentTaskRepository {
       .select()
       .from(agentTasks)
       .where(and(eq(agentTasks.id, taskId), eq(agentTasks.userId, userId)))
+      .limit(1);
+    return row ?? null;
+  }
+
+  /** The user's most recent task on a channel that is in one of `statuses`. Always scoped to the user. */
+  async latestForUser(userId: string, channel: 'api' | 'whatsapp', statuses: TaskStatus[]): Promise<AgentTask | null> {
+    const [row] = await this.db
+      .select()
+      .from(agentTasks)
+      .where(
+        and(eq(agentTasks.userId, userId), eq(agentTasks.channel, channel), inArray(agentTasks.status, statuses))
+      )
+      .orderBy(desc(agentTasks.createdAt), desc(agentTasks.id))
       .limit(1);
     return row ?? null;
   }

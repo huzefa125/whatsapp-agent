@@ -221,6 +221,15 @@ export const agentTasks = pgTable(
     leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
     runAfter: timestamp('run_after', { withTimezone: true }).defaultNow().notNull(),
     cancelRequestedAt: timestamp('cancel_requested_at', { withTimezone: true }),
+    // Where the user is talking to us: 'api' (REST, caller polls) or 'whatsapp' (we push the outcome back).
+    channel: varchar('channel', { length: 16 }).default('api').notNull(),
+    // WhatsApp reply bookkeeping: `reply_key` is the last outcome already announced to the user
+    // (a terminal status, or `awaiting:<callId>`); a task is owed a reply while it differs from the current one.
+    replyKey: varchar('reply_key', { length: 96 }),
+    replyAttempts: integer('reply_attempts').default(0).notNull(),
+    replyNextAt: timestamp('reply_next_at', { withTimezone: true }).defaultNow().notNull(),
+    replyLeaseUntil: timestamp('reply_lease_until', { withTimezone: true }),
+    replyError: text('reply_error'),
     confirmationExpiresAt: timestamp('confirmation_expires_at', { withTimezone: true }),
     startedAt: timestamp('started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
@@ -230,6 +239,7 @@ export const agentTasks = pgTable(
   (table) => [
     index('agent_tasks_user_created_idx').on(table.userId, table.createdAt),
     index('agent_tasks_status_run_after_idx').on(table.status, table.runAfter),
+    index('agent_tasks_channel_status_idx').on(table.channel, table.status),
     uniqueIndex('agent_tasks_user_idempotency_idx').on(table.userId, table.idempotencyKey),
   ]
 );

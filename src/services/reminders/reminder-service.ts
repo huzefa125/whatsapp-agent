@@ -1,3 +1,4 @@
+import { suggestTimezoneFromPhone } from './phone-timezone';
 import { getConfig } from '../../config/env';
 import { Reminder } from '../../db/schema';
 import { BadRequestError, ConflictError } from '../../utils/errors';
@@ -141,7 +142,7 @@ export class ReminderService {
     if (!tz) {
       throw new ReminderError(
         'TIMEZONE_REQUIRED',
-        'The user has not set a timezone, so times cannot be interpreted. They must set one first (PATCH /api/users/me).'
+        'The user has not set a timezone, so times cannot be interpreted. They must set one first (ask them, then use set_timezone).'
       );
     }
     return tz;
@@ -266,10 +267,15 @@ export class ReminderService {
   /** Extra system-prompt text so the model resolves "tomorrow" etc. against the user's real local date. */
   async buildAgentContext(userId: string): Promise<string> {
     const now = this.clock.now();
-    const tz = await this.getTimezone(userId);
+    const user = await this.repo.getUser(userId);
+    const tz = user?.timezone ?? null;
+    const guess = !tz && user ? suggestTimezoneFromPhone(user.phoneNumber) : null;
+    const askHint = guess
+      ? `Their phone number suggests ${guess}, but that is only a guess: ask ONE short question to confirm it (e.g. "Are you on ${guess} time?"). Call set_timezone only after they say yes (or give a different place).`
+      : 'Ask which city or timezone they are in, then call set_timezone with the matching IANA name.';
     const header = tz
       ? `Reminder context:\n- Current time (UTC): ${now.toISOString()}\n- The user's timezone: ${tz}. Their local time now: ${formatInZone(now, tz)}.`
-      : 'Reminder context:\n- The user has NOT set a timezone. Do not schedule reminders; tell them to set one first.';
+      : `Reminder context:\n- The user has NOT set a timezone. Do not schedule reminders yet. ${askHint} Then continue with their request.`;
     return `${header}
 - To schedule, call create_reminder. Use when.kind="relative" for "in 30 minutes"; use when.kind="local" with the user's LOCAL date (YYYY-MM-DD, derived from their local date above) and a 24-hour HH:mm time for things like "tomorrow at 10 AM".
 - NEVER guess a missing date, time or AM/PM. If anything is unclear, ask one short clarification question instead of calling a tool.

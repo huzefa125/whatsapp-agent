@@ -22,6 +22,9 @@ export interface CreateTaskRequest {
   request: string;
   conversationId?: string | undefined;
   idempotencyKey?: string | undefined;
+  channel?: 'api' | 'whatsapp' | undefined;
+  /** wamid of the inbound WhatsApp message that produced this request. */
+  providerMessageId?: string | undefined;
 }
 
 export interface TaskServiceDeps {
@@ -83,6 +86,8 @@ export class AgentTaskService {
       idempotencyKey: req.idempotencyKey ?? null,
       maxAttempts: config.AGENT_MAX_ATTEMPTS,
       userMessage: req.conversationId ? input.request : null,
+      channel: req.channel ?? 'api',
+      userMessageProviderId: req.providerMessageId ?? null,
     });
 
     if (!created) {

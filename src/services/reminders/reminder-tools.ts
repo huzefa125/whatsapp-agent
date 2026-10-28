@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ConflictError, NotFoundError } from '../../utils/errors';
+import { BadRequestError, ConflictError, NotFoundError } from '../../utils/errors';
 import { ToolError, type ToolDefinition } from '../agent/engine/types';
 import { ReminderService, ReminderView } from './reminder-service';
 import { ReminderError, scheduleSpecSchema, ScheduleSpec } from './time';
@@ -37,6 +37,10 @@ const rescheduleInput = z
   })
   .strict()
   .refine((v) => v.when !== undefined || v.title !== undefined, { message: 'Provide when and/or title' });
+
+const timezoneInput = z
+  .object({ timezone: z.string().trim().min(1).max(64).describe('IANA timezone name, e.g. "Asia/Kolkata" or "America/New_York"') })
+  .strict();
 
 const idOnlyInput = z.object({ reminderId }).strict();
 
@@ -194,5 +198,25 @@ export function createReminderTools(service: ReminderService): Array<ToolDefinit
     },
   };
 
-  return [create, list, reschedule, cancel, complete];
+  const setTimezone: ToolDefinition<z.infer<typeof timezoneInput>, unknown> = {
+    name: 'set_timezone',
+    description:
+      "Saves the user's IANA timezone so reminder times can be interpreted. Only call it after the user has told you their city, country or timezone; map it to an IANA name and never guess.",
+    inputSchema: timezoneInput,
+    permissions: ['reminders:write'],
+    sideEffect: 'idempotent',
+    requiresConfirmation: false,
+    timeoutMs: 8000,
+    retry: { maxRetries: 0, backoffMs: 0 },
+    async execute(input, ctx) {
+      try {
+        return { timezone: await service.setTimezone(ctx.userId, input.timezone) };
+      } catch (err) {
+        if (err instanceof BadRequestError) throw new ToolError('INVALID_TIMEZONE', err.message);
+        return toToolError(err);
+      }
+    },
+  };
+
+  return [create, list, reschedule, cancel, complete, setTimezone];
 }
