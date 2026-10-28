@@ -406,6 +406,38 @@ describe.skipIf(!hasTestDb)('WhatsApp → agent → WhatsApp (mocked model and W
     expect(client.texts()).toEqual(['Third time lucky']);
   });
 
+  it('keeps messages from one user in order: a follow-up cannot overtake a request that is waiting to retry', async () => {
+    const u = await mkUser();
+    install([new RateLimitError('429'), text('first answer'), text('second answer')]);
+    await inbound(u.from, 'remind me to pay rent');
+    await outbox.processNextJob();
+    await service.processNext(); // rate limited -> retry scheduled
+    await getDb().update(agentTasks).set({ runAfter: new Date(Date.now() + 60_000) }); // still backing off
+
+    await inbound(u.from, 'tomorrow at 4pm'); // the user answers while the first is waiting
+    await outbox.processNextJob();
+    expect(await service.processNext()).toBe(false); // blocked behind the first request
+    expect(provider.calls).toHaveLength(1);
+
+    await getDb().update(agentTasks).set({ runAfter: new Date() }).where(eq(agentTasks.status, 'pending'));
+    await pump();
+    expect(client.texts()).toEqual(['first answer', 'second answer']);
+    const seen = provider.calls[2]!.messages.map((m) => ('content' in m ? String(m.content) : '')).join(' | ');
+    expect(seen).toContain('remind me to pay rent'); // the follow-up saw the original request
+  });
+
+  it('does not make different users wait for each other', async () => {
+    const a = await mkUser();
+    const b = await mkUser();
+    install([text('for a'), text('for b')]);
+    await inbound(a.from, 'hi');
+    await inbound(b.from, 'hi');
+    await outbox.processNextJob();
+    await outbox.processNextJob();
+    expect(await service.processNext()).toBe(true);
+    expect(await service.processNext()).toBe(true); // b is not blocked by a's task
+  });
+
   it('gives up after the retry budget and tells the user once', async () => {
     const u = await mkUser();
     install([new RateLimitError('429'), new RateLimitError('429'), new RateLimitError('429')]);

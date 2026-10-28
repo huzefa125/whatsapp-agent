@@ -201,7 +201,19 @@ export class AgentTaskRepository {
         const [row] = await tx
           .select()
           .from(agentTasks)
-          .where(and(eq(agentTasks.status, 'pending'), lte(agentTasks.runAfter, dbNow)))
+          .where(
+            and(
+              eq(agentTasks.status, 'pending'),
+              lte(agentTasks.runAfter, dbNow),
+              // A chat user's requests run strictly one at a time, in arrival order: a follow-up ("ok", "tomorrow
+              // at 4") must never overtake the request it refers to, even while that one waits out a retry.
+              sql`(${agentTasks.channel} <> 'whatsapp' or not exists (
+                select 1 from agent_tasks e
+                where e.user_id = ${agentTasks.userId} and e.channel = 'whatsapp'
+                  and e.status in ('pending', 'running')
+                  and (e.created_at, e.id) < (${agentTasks.createdAt}, ${agentTasks.id})))`
+            )
+          )
           .orderBy(asc(agentTasks.runAfter), asc(agentTasks.createdAt))
           .limit(1)
           .for('update', { skipLocked: true });
