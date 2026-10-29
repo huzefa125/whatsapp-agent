@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createDefaultToolRegistry } from '../../src/services/agent/engine/task-service';
-import { setMemoryServiceForTesting, getMemoryService, MemoryService } from '../../src/services/memory';
+import { setMemoryServiceForTesting, MemoryService } from '../../src/services/memory';
 import type { ToolExecutionContext } from '../../src/services/agent/engine/types';
 import type { WorkflowMemory } from '../../src/services/memory/types';
 
@@ -84,7 +84,7 @@ describe('Workflow Memory Integration', () => {
         }
         return results.slice(0, options.limit ?? 5);
       }),
-      list: vi.fn().mockImplementation(async (userId, options) => {
+      list: vi.fn().mockImplementation(async (userId, _options) => {
         const memories = Array.from(inMemoryStore.values()).filter((m) => m.userId === userId);
         return { memories, total: memories.length };
       }),

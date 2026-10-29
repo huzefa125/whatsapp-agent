@@ -151,7 +151,7 @@ describe('Workflow Memory Service', () => {
       // Max chars 100 allows first memory (~65 chars) but cuts off second
       const results = await service.searchMemories('user-1', { maxChars: 100 });
       expect(results.length).toBe(1);
-      expect(results[0].id).toBe('mem-1');
+      expect(results[0]?.id).toBe('mem-1');
     });
   });
 
