@@ -345,6 +345,81 @@ export const reminders = pgTable(
   ]
 );
 
+/**
+ * Browser connections: a website the user has authorized the assistant to use on their behalf.
+ * The authenticated browser state (cookies / local storage) is stored ONLY as AES-256-GCM ciphertext
+ * (`encrypted_state`), is scoped to one user and one origin, and is deleted on disconnect.
+ * `status`: connected | expired | revoked
+ */
+export const browserConnections = pgTable(
+  'browser_connections',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // Normalized origin, e.g. https://mail.example.com (never a path, never credentials).
+    origin: varchar('origin', { length: 255 }).notNull(),
+    label: varchar('label', { length: 80 }),
+    status: varchar('status', { length: 16 }).default('connected').notNull(),
+    // "v1.<iv>.<tag>.<ciphertext>" (base64url). Null once revoked.
+    encryptedState: text('encrypted_state'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('browser_connections_user_origin_idx').on(table.userId, table.origin),
+    check('browser_connections_status_chk', sql`${table.status} in ('connected','expired','revoked')`),
+  ]
+);
+
+/**
+ * Browser runs: one browser workflow (a live session plus its limits and checkpoint).
+ * Only metadata is persisted: URLs without query/hash, counters, action kinds. No page content,
+ * screenshots, form values or cookies. `status`: queued | running | waiting_for_user | completed | failed | cancelled
+ */
+export const browserRuns = pgTable(
+  'browser_runs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id').references(() => agentTasks.id, { onDelete: 'set null' }),
+    connectionId: uuid('connection_id').references(() => browserConnections.id, { onDelete: 'set null' }),
+    status: varchar('status', { length: 24 }).default('queued').notNull(),
+    // Hosts the run may navigate to (start host and its subdomains), fixed when the run is created.
+    scopeHost: varchar('scope_host', { length: 255 }).notNull(),
+    startUrl: text('start_url').notNull(),
+    // Resume point: { url, generation, actions: [{ kind, at }] }. Query strings and fragments are stripped.
+    checkpoint: jsonb('checkpoint').default({}).notNull(),
+    stepCount: integer('step_count').default(0).notNull(),
+    navigationCount: integer('navigation_count').default(0).notNull(),
+    recoveryCount: integer('recovery_count').default(0).notNull(),
+    // waiting_for_user: login_required | captcha | blocked | confirmation
+    waitReason: varchar('wait_reason', { length: 32 }),
+    errorCode: varchar('error_code', { length: 64 }),
+    errorMessage: text('error_message'),
+    idempotencyKey: varchar('idempotency_key', { length: 128 }),
+    deadlineAt: timestamp('deadline_at', { withTimezone: true }).notNull(),
+    lastActivityAt: timestamp('last_activity_at', { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('browser_runs_user_status_idx').on(table.userId, table.status),
+    index('browser_runs_status_activity_idx').on(table.status, table.lastActivityAt),
+    uniqueIndex('browser_runs_user_idempotency_idx').on(table.userId, table.idempotencyKey),
+    check(
+      'browser_runs_status_chk',
+      sql`${table.status} in ('queued','running','waiting_for_user','completed','failed','cancelled')`
+    ),
+  ]
+);
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   conversations: many(conversations),
@@ -429,3 +504,9 @@ export type NewAgentToolCall = typeof agentToolCalls.$inferInsert;
 
 export type Reminder = typeof reminders.$inferSelect;
 export type NewReminder = typeof reminders.$inferInsert;
+
+export type BrowserConnection = typeof browserConnections.$inferSelect;
+export type NewBrowserConnection = typeof browserConnections.$inferInsert;
+
+export type BrowserRun = typeof browserRuns.$inferSelect;
+export type NewBrowserRun = typeof browserRuns.$inferInsert;

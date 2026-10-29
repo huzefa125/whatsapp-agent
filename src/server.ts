@@ -53,6 +53,16 @@ export async function startServer(): Promise<http.Server> {
     logger.info('Reminder worker disabled via REMINDER_WORKER_ENABLED=false');
   }
 
+  // Browser automation (optional): resume interrupted runs and release idle/expired sessions in the background.
+  let browserService: import('./services/browser').BrowserService | null = null;
+  if (config.BROWSER_ENABLED) {
+    const { getBrowserService } = await import('./services/browser');
+    browserService = getBrowserService();
+    await browserService.recover().catch((err) => logger.error({ err }, 'Browser run recovery failed'));
+    browserService.startSweeper();
+    logger.info('Browser automation enabled');
+  }
+
   const app = createApp();
   const server = http.createServer(app);
 
@@ -85,6 +95,7 @@ export async function startServer(): Promise<http.Server> {
       await agentTasks.stopWorker();
       await getReplyDispatcher().stop();
       await reminderWorker.stop();
+      await browserService?.shutdown();
 
       // 2. Close HTTP server
       await new Promise<void>((resolve, reject) => {

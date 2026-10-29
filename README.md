@@ -389,3 +389,77 @@ Inbound WhatsApp text → `POST /webhook` (signature verified) → durable `webh
 5. Email OTPs: set `EMAIL_PROVIDER=smtp` and `SMTP_HOST/PORT/USER/PASS/FROM` (the default `stub` sends nothing).
 6. Register your own number through `/api/auth/*`. **Message the business number first** (any text): the phone OTP is sent as free text, which WhatsApp only allows inside the 24-hour window, so a number that has never written to you cannot receive its code. While the Meta app is in development mode, also add your number to the allowed recipients list.
 7. Set your timezone by chatting ("remind me tomorrow at 10", the agent asks) or `PATCH /api/users/me`.
+
+## 11. Browser Automation (Phase 1)
+
+A reusable, security-first browser engine (Playwright + Chromium) that the agent drives through its normal tool registry.
+It is **off by default** (`BROWSER_ENABLED=false`). Later phases (Gmail, calendars, travel, CRM...) build on it.
+
+### Enabling it
+
+```bash
+npm run browser:install          # downloads Chromium once
+npm run browser:genkey           # prints a key for BROWSER_ENCRYPTION_KEY (needed only to store website sign-ins)
+# .env: BROWSER_ENABLED=true, BROWSER_ENCRYPTION_KEY=..., and add browser:* to AGENT_DEFAULT_PERMISSIONS
+npm run db:migrate
+```
+
+### Architecture
+
+```
+WhatsApp / API  ->  Agent Engine (existing)  ->  browser_* tools  ->  BrowserService  ->  BrowserSession (Playwright)
+                                                      |                     |                    |
+                                              confirmation gate       browser_runs         network guard + URL policy
+                                              (existing engine)       (checkpoints)        (SSRF, scope, mutation block)
+```
+
+- `src/services/browser/session.ts`: one isolated BrowserContext per run. Snapshot of visible text and interactive
+  elements with server-issued **refs** (`e<generation>-<n>`); the model never supplies selectors or scripts.
+- `browser-service.ts`: limits (steps, navigations, deadline), per-run serialization, checkpoints, replay protection,
+  login/CAPTCHA/blocked detection (`waiting_for_user`), restart recovery.
+- `browser-tools.ts`: 14 tools. Reads and low-risk interaction run directly. Anything that sends, books, buys, cancels,
+  deletes or submits is only possible through `browser_perform_sensitive_action`, a `non_idempotent` tool that the
+  engine runs only after the user confirms it.
+- `connection-service.ts`: authorized websites; AES-256-GCM encrypted, bound to user + origin.
+
+### Run states
+
+`queued` -> `running` -> `completed | failed | cancelled`, and `waiting_for_user` (login, CAPTCHA, blocked). After a restart,
+`running` runs return to `queued` and resume from their last checkpointed page (GET only; actions are never replayed).
+
+### Security boundaries
+
+| Concern | Control |
+|---|---|
+| SSRF / DNS rebinding | Every request (typed URL, redirect hop, sub-resource) is validated: http(s) only, no credentials, public addresses only (loopback, private, link-local, metadata, IPv4-mapped IPv6 refused), DNS answers re-checked, and the connected address is verified after the response. |
+| Leaving the site | Main-frame navigation is limited to the start host and its subdomains; JS/meta redirects and popups are stopped. |
+| Unconfirmed submissions | POST/PUT/PATCH/DELETE from a page is aborted unless a user-confirmed action is running (backstop against mislabelled buttons). |
+| Confirmation binding | The user sees recipient, page, form values; approval is bound to a fingerprint of the element, page and every form value. Any change refuses the action (`ACTION_CHANGED`). |
+| Prompt injection | Page text is labelled untrusted, hidden/tiny/transparent text is dropped, injected instructions are flagged, and none of it can grant permissions or skip confirmation. |
+| Secrets | The assistant never types password, payment or one-time-code fields. Cookies/tokens are never given to the model and never logged; URLs are stored/logged as origin + path only. |
+| Isolation | Runs, connections and sessions are always queried by `user_id`; no profile or cookie jar is shared. |
+| Resources | Session caps (global and per user), request cap, step/navigation/time limits, idle sweeper; downloads, dialogs, file pickers, WebSockets, service workers and permissions are blocked. |
+
+### Connecting a website (user signs in themselves)
+
+```bash
+npm run browser:connect -- --user <user-uuid> --url https://app.example.com --label "My CRM"
+```
+
+A real browser window opens; the user signs in (including CAPTCHA/2FA) and presses Enter. Only the session for that
+site is kept, encrypted. `GET /api/browser/connections` lists them; `DELETE /api/browser/connections/:id` erases the
+stored session and ends any live browser using it. An expired session is detected and the user is asked to reconnect.
+
+### Manual test (no database, model or account needed)
+
+```bash
+npm run browser:demo                 # reads https://example.com and shows the safety guards refusing things
+npm run browser:demo -- --local      # local test shop: forms, a "Send message" button that is refused without confirmation
+```
+
+### Tests
+
+`tests/unit/browser-security.test.ts` (policy, SSRF, encryption, risk, redaction, fingerprints) and
+`tests/integration/browser-{session,service,agent}.test.ts` (real Chromium against a local site that never touches the
+internet). The DB-backed ones need `TEST_DATABASE_URL` (a database whose name contains "test"); all are skipped, not failed,
+when Chromium or the test DB is missing.

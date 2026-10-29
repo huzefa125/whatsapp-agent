@@ -17,6 +17,7 @@ import { calculatorTool } from './tools/calculator';
 import { ToolRegistry } from './tool-registry';
 import { getReminderService, ReminderService } from '../../reminders/reminder-service';
 import { createReminderTools } from '../../reminders/reminder-tools';
+import { getIntegrations } from '../../integrations';
 
 export interface CreateTaskRequest {
   request: string;
@@ -35,10 +36,12 @@ export interface TaskServiceDeps {
   reminders?: ReminderService;
 }
 
-/** Built-in tools: the demo calculator plus the reminder tools (create/list/reschedule/cancel/complete). */
+/** Built-in tools: calculator, reminders, plus the tools of every enabled integration (see services/integrations). */
 export function createDefaultToolRegistry(reminders: ReminderService = getReminderService()): ToolRegistry {
   const registry = new ToolRegistry().register(calculatorTool);
   for (const tool of createReminderTools(reminders)) registry.register(tool);
+  // Integrations (the browser fallback today; official API providers in later phases) contribute their own tools.
+  for (const tool of getIntegrations().allTools()) registry.register(tool);
   return registry;
 }
 

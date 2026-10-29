@@ -534,7 +534,7 @@ ${extraContext}` : TOOL_USE_SYSTEM_PROMPT;
     const pending: PendingConfirmation = {
       callId: call.id,
       toolName: tool.name,
-      summary: truncate(scrubText(summary), 300),
+      summary: truncate(scrubText(summary), 800),
       arguments: argsJson.length <= 2000 ? JSON.parse(scrubText(argsJson)) : { truncated: true },
     };
     await this.deps.repo.pauseForConfirmation(

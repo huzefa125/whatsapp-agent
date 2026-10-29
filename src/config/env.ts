@@ -65,6 +65,43 @@ const envSchema = z.object({
   // Comma-separated permissions granted to every fully verified user (no per-user grants yet).
   AGENT_DEFAULT_PERMISSIONS: z.string().default('utility:read,reminders:read,reminders:write'),
 
+  // Browser automation (Phase 1). Off by default; users also need the browser:* permissions
+  // (add `browser:*` to AGENT_DEFAULT_PERMISSIONS to grant them to every verified user).
+  BROWSER_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  BROWSER_HEADLESS: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  BROWSER_MAX_SESSIONS: z.coerce.number().int().min(1).max(20).default(3),
+  BROWSER_MAX_SESSIONS_PER_USER: z.coerce.number().int().min(1).max(5).default(1),
+  BROWSER_MAX_STEPS: z.coerce.number().int().min(1).max(500).default(40),
+  BROWSER_MAX_NAVIGATIONS: z.coerce.number().int().min(1).max(200).default(15),
+  BROWSER_MAX_RUN_SECONDS: z.coerce.number().int().min(10).max(3600).default(300),
+  BROWSER_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().min(10).default(120),
+  BROWSER_NAV_TIMEOUT_MS: z.coerce.number().int().min(1000).default(20000),
+  BROWSER_ACTION_TIMEOUT_MS: z.coerce.number().int().min(500).default(8000),
+  BROWSER_MAX_TEXT_CHARS: z.coerce.number().int().min(500).default(4000),
+  BROWSER_MAX_ELEMENTS: z.coerce.number().int().min(10).max(300).default(60),
+  // Comma-separated host allowlist (hosts and their subdomains). Empty = any public host.
+  BROWSER_ALLOWED_DOMAINS: z.string().default(''),
+  // Comma-separated hosts that are never reachable.
+  BROWSER_BLOCKED_DOMAINS: z.string().default(''),
+  // Dev/test only: allows loopback/private targets (e.g. a local test page). Rejected in production.
+  BROWSER_ALLOW_PRIVATE_NETWORK: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  // Block POST/PUT/PATCH/DELETE from the page unless a confirmed action is executing.
+  BROWSER_BLOCK_UNCONFIRMED_MUTATIONS: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  // base64 of 32 random bytes. Required to store website connections (authenticated sessions).
+  BROWSER_ENCRYPTION_KEY: z.string().optional().default(''),
+
   // Reminders & Scheduling
   REMINDER_WORKER_ENABLED: z
     .enum(['true', 'false'])
@@ -140,6 +177,12 @@ export function validateEnv(customEnv?: Record<string, unknown>): EnvConfig {
     if (!config.WHATSAPP_ACCESS_TOKEN || config.WHATSAPP_ACCESS_TOKEN === 'your_system_user_access_token_here') {
       throw new Error('Production environment requires a real WHATSAPP_ACCESS_TOKEN');
     }
+    if (config.BROWSER_ALLOW_PRIVATE_NETWORK) {
+      throw new Error('Production must not set BROWSER_ALLOW_PRIVATE_NETWORK=true (it disables SSRF protection)');
+    }
+    if (config.BROWSER_ENABLED && !config.BROWSER_BLOCK_UNCONFIRMED_MUTATIONS) {
+      throw new Error('Production with BROWSER_ENABLED=true requires BROWSER_BLOCK_UNCONFIRMED_MUTATIONS=true');
+    }
     if (config.WHATSAPP_PROVIDER === 'ycloud') {
       if (!config.YCLOUD_API_KEY || !config.YCLOUD_WHATSAPP_FROM || !config.YCLOUD_WEBHOOK_SECRET) {
         throw new Error('Production with WHATSAPP_PROVIDER=ycloud requires YCLOUD_API_KEY, YCLOUD_WHATSAPP_FROM, and YCLOUD_WEBHOOK_SECRET');
@@ -174,6 +217,7 @@ export function getSafeConfig(config: EnvConfig): Record<string, unknown> {
     WHATSAPP_APP_SECRET: config.WHATSAPP_APP_SECRET ? '[REDACTED_SECRET]' : undefined,
     WHATSAPP_ACCESS_TOKEN: config.WHATSAPP_ACCESS_TOKEN ? '[REDACTED_TOKEN]' : undefined,
     WHATSAPP_VERIFY_TOKEN: config.WHATSAPP_VERIFY_TOKEN ? '[REDACTED_VERIFY_TOKEN]' : undefined,
+    BROWSER_ENCRYPTION_KEY: config.BROWSER_ENCRYPTION_KEY ? '[REDACTED_BROWSER_KEY]' : undefined,
     TRANSCRIBE_API_KEY: config.TRANSCRIBE_API_KEY ? '[REDACTED_TRANSCRIBE_KEY]' : undefined,
     YCLOUD_API_KEY: config.YCLOUD_API_KEY ? '[REDACTED_YCLOUD_KEY]' : undefined,
     YCLOUD_WEBHOOK_SECRET: config.YCLOUD_WEBHOOK_SECRET ? '[REDACTED_YCLOUD_SECRET]' : undefined,
@@ -204,6 +248,8 @@ export function getConfig(): EnvConfig {
         AI_PROVIDER: 'stub',
         AI_API_KEY: '',
         TRANSCRIBE_API_KEY: '',
+        BROWSER_ENABLED: 'false',
+        BROWSER_ALLOW_PRIVATE_NETWORK: 'false',
         // Tests exercise the Meta transport; a developer's .env must not switch it.
         WHATSAPP_PROVIDER: 'meta',
       });

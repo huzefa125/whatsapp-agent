@@ -15,7 +15,11 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:migrate:prod": "node dist/db/migrate.js",
     "db:studio": "drizzle-kit studio",
-    "chat:sim": "tsx src/scripts/simulate-chat.ts"
+    "chat:sim": "tsx src/scripts/simulate-chat.ts",
+    "browser:demo": "tsx src/scripts/browser-demo.ts",
+    "browser:connect": "tsx src/scripts/browser-connect.ts",
+    "browser:genkey": "node -e \"console.log(require('crypto').randomBytes(32).toString('base64'))\"",
+    "browser:install": "playwright install chromium"
   },
   "keywords": [
     "whatsapp",
@@ -39,6 +43,7 @@
     "pg": "^8.13.3",
     "pino": "^9.6.0",
     "pino-http": "^10.4.0",
+    "playwright": "^1.49.1",
     "swagger-ui-express": "^5.0.1",
     "zod": "^3.24.2",
     "zod-to-json-schema": "^3.24.6"
