@@ -87,8 +87,8 @@ export interface RunnerDeps {
   registry: ToolRegistry;
   permissions: PermissionResolver;
   getProvider: () => AiProvider;
-  /** Extra per-user system-prompt text (e.g. the user's current local time). Rebuilt on every model call. */
-  systemContext?: (userId: string) => Promise<string | null>;
+  /** Extra per-user system-prompt text (e.g. timezone or workflow memories). Rebuilt on every model call. */
+  systemContext?: (userId: string, task?: AgentTask) => Promise<string | null>;
   config?: Partial<RunnerConfig>;
 }
 
@@ -221,7 +221,7 @@ export class AgentRunner {
       }
 
       const rounds = countToolRounds(transcript);
-      const extraContext = (await this.deps.systemContext?.(task.userId)) ?? null;
+      const extraContext = (await this.deps.systemContext?.(task.userId, task)) ?? null;
       const systemPrompt = extraContext ? `${TOOL_USE_SYSTEM_PROMPT}
 ${extraContext}` : TOOL_USE_SYSTEM_PROMPT;
       const completion = await this.callModel(ctx, provider, toProviderMessages(systemPrompt, transcript), specs);

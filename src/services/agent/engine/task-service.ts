@@ -18,6 +18,7 @@ import { ToolRegistry } from './tool-registry';
 import { getReminderService, ReminderService } from '../../reminders/reminder-service';
 import { createReminderTools } from '../../reminders/reminder-tools';
 import { getIntegrations } from '../../integrations';
+import { getMemoryService, MemoryService, createMemoryTools } from '../../memory';
 
 export interface CreateTaskRequest {
   request: string;
@@ -34,12 +35,17 @@ export interface TaskServiceDeps {
   registry?: ToolRegistry;
   permissions?: PermissionResolver;
   reminders?: ReminderService;
+  memory?: MemoryService;
 }
 
-/** Built-in tools: calculator, reminders, plus the tools of every enabled integration (see services/integrations). */
-export function createDefaultToolRegistry(reminders: ReminderService = getReminderService()): ToolRegistry {
+/** Built-in tools: calculator, reminders, memory, plus the tools of every enabled integration. */
+export function createDefaultToolRegistry(
+  reminders: ReminderService = getReminderService(),
+  memory: MemoryService = getMemoryService()
+): ToolRegistry {
   const registry = new ToolRegistry().register(calculatorTool);
   for (const tool of createReminderTools(reminders)) registry.register(tool);
+  for (const tool of createMemoryTools(memory)) registry.register(tool);
   // Integrations (the browser fallback today; official API providers in later phases) contribute their own tools.
   for (const tool of getIntegrations().allTools()) registry.register(tool);
   return registry;
@@ -56,7 +62,8 @@ export class AgentTaskService {
   constructor(deps: TaskServiceDeps = {}) {
     this.repo = deps.repo ?? new AgentTaskRepository();
     const reminders = deps.reminders ?? getReminderService();
-    this.registry = deps.registry ?? createDefaultToolRegistry(reminders);
+    const memory = deps.memory ?? getMemoryService();
+    this.registry = deps.registry ?? createDefaultToolRegistry(reminders, memory);
     this.runner =
       deps.runner ??
       new AgentRunner({
@@ -64,7 +71,14 @@ export class AgentTaskService {
         registry: this.registry,
         permissions: deps.permissions ?? new DefaultPermissionResolver(),
         getProvider: getAiProvider,
-        systemContext: (userId) => reminders.buildAgentContext(userId),
+        systemContext: async (userId, task) => {
+          const reqText = (task?.input as { request?: string } | undefined)?.request;
+          const [reminderCtx, memoryCtx] = await Promise.all([
+            reminders.buildAgentContext(userId),
+            memory.buildAgentContext(userId, reqText),
+          ]);
+          return [reminderCtx, memoryCtx].filter(Boolean).join('\n\n');
+        },
       });
   }
 

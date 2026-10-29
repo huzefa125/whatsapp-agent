@@ -57,6 +57,13 @@
       "when": 1793280000000,
       "tag": "0007_gmail_integration",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793290000000,
+      "tag": "0008_workflow_memory",
+      "breakpoints": true
     }
   ]
 }

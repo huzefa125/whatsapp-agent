@@ -63,7 +63,7 @@ const envSchema = z.object({
   AGENT_HISTORY_LIMIT: z.coerce.number().int().min(0).max(100).default(20),
   AGENT_CONFIRMATION_TTL_MINUTES: z.coerce.number().int().min(1).default(30),
   // Comma-separated permissions granted to every fully verified user (no per-user grants yet).
-  AGENT_DEFAULT_PERMISSIONS: z.string().default('utility:read,reminders:read,reminders:write'),
+  AGENT_DEFAULT_PERMISSIONS: z.string().default('utility:read,reminders:read,reminders:write,memory:read,memory:write'),
 
   // Browser automation (Phase 1). Off by default; users also need the browser:* permissions
   // (add `browser:*` to AGENT_DEFAULT_PERMISSIONS to grant them to every verified user).
@@ -182,6 +182,15 @@ const envSchema = z.object({
   GMAIL_OAUTH_STATE_TTL_MINUTES: z.coerce.number().int().min(1).max(30).default(10),
   // Maximum emails returned per search.
   GMAIL_MAX_RESULTS: z.coerce.number().int().min(1).max(50).default(10),
+
+  // Workflow Memory
+  MEMORY_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  MEMORY_MAX_RETRIEVED: z.coerce.number().int().min(1).max(20).default(5),
+  MEMORY_MAX_CONTEXT_CHARS: z.coerce.number().int().min(200).max(10000).default(2500),
+  MEMORY_DEFAULT_EXPIRY_DAYS: z.coerce.number().int().min(0).max(3650).default(0), // 0 = no expiry
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
@@ -305,6 +314,7 @@ export function getConfig(): EnvConfig {
         BROWSER_ENABLED: 'false',
         BROWSER_HANDOFF_ENABLED: 'false',
         BROWSER_ALLOW_PRIVATE_NETWORK: 'false',
+        MEMORY_ENABLED: 'true',
         // Tests exercise the Meta transport; a developer's .env must not switch it.
         WHATSAPP_PROVIDER: 'meta',
       });

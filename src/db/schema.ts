@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, timestamp, jsonb, integer, boolean, index, uniqueIndex, check } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, timestamp, jsonb, integer, boolean, real, index, uniqueIndex, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 
 /**
@@ -563,6 +563,42 @@ export const gmailSendLog = pgTable(
   ]
 );
 
+/**
+ * Workflow Memories table: user-approved preferences, reusable workflows, facts, and project context.
+ * Enforces per-user ownership, approval state, and lifecycle.
+ */
+export const workflowMemories = pgTable(
+  'workflow_memories',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    type: varchar('type', { length: 32 }).notNull(), // 'preference' | 'workflow' | 'fact' | 'project_context'
+    title: varchar('title', { length: 255 }).notNull(),
+    content: text('content').notNull(),
+    searchKeywords: text('search_keywords'),
+    source: varchar('source', { length: 32 }).default('explicit_user').notNull(), // 'explicit_user' | 'inferred' | 'system'
+    provenance: text('provenance'),
+    status: varchar('status', { length: 16 }).default('active').notNull(), // 'active' | 'archived' | 'expired'
+    approvalState: varchar('approval_state', { length: 32 }).default('approved').notNull(), // 'approved' | 'pending_approval' | 'rejected'
+    confidence: real('confidence').default(1.0).notNull(),
+    project: varchar('project', { length: 128 }),
+    integration: varchar('integration', { length: 64 }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    lastAccessedAt: timestamp('last_accessed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('workflow_memories_user_status_approval_idx').on(table.userId, table.status, table.approvalState),
+    index('workflow_memories_user_type_idx').on(table.userId, table.type),
+    index('workflow_memories_user_project_idx').on(table.userId, table.project),
+    index('workflow_memories_expires_idx').on(table.expiresAt),
+    index('workflow_memories_updated_idx').on(table.updatedAt),
+  ]
+);
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   conversations: many(conversations),
@@ -570,6 +606,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(sessions),
   authFlows: many(authFlows),
   gmailConnections: many(gmailConnections),
+  workflowMemories: many(workflowMemories),
 }));
 
 export const authFlowsRelations = relations(authFlows, ({ one, many }) => ({
@@ -685,3 +722,13 @@ export type NewGmailOauthState = typeof gmailOauthStates.$inferInsert;
 
 export type GmailSendLogEntry = typeof gmailSendLog.$inferSelect;
 export type NewGmailSendLogEntry = typeof gmailSendLog.$inferInsert;
+
+export const workflowMemoriesRelations = relations(workflowMemories, ({ one }) => ({
+  user: one(users, {
+    fields: [workflowMemories.userId],
+    references: [users.id],
+  }),
+}));
+
+export type WorkflowMemory = typeof workflowMemories.$inferSelect;
+export type NewWorkflowMemory = typeof workflowMemories.$inferInsert;

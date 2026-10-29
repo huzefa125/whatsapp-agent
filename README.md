@@ -514,3 +514,39 @@ GMAIL_CLIENT_SECRET=your-google-client-secret
 GMAIL_REDIRECT_URI=http://localhost:3000/api/gmail/oauth/callback
 GMAIL_ENCRYPTION_KEY=<32-byte-base64-key>
 ```
+
+## 14. Workflow Memory System (Phase 4)
+
+Persistent memory system that enables the WhatsApp AI agent to remember user-approved preferences, reusable workflows, non-sensitive facts, and project context across conversations.
+
+### 14.1 Key Architecture & Safety Features
+
+| Area | Implementation |
+|---|---|
+| **Categories** | `preference` (communication style/formatting), `workflow` (reusable procedures for recurring tasks), `fact` (user-approved facts), and `project_context` (project-scoped notes). |
+| **Approval Flow** | Explicit user requests to remember something are saved as `approvalState: 'approved'` and immediately active. Inferred suggestions are saved as `pending_approval` and require explicit user consent before becoming active. |
+| **Context Injection** | Relevant, active, approved memories are queried before model execution and injected as a clearly separated section in the system prompt. Memories are treated as untrusted contextual data and cannot override system policies or confirmation gates. |
+| **Safe Fallback** | If memory retrieval fails or database is unavailable, the agent fails open and continues answering the user's task without interruption. |
+| **Secret Detection** | Automated regex scanner blocks saving passwords, private keys, AWS keys, GitHub tokens, OpenAI keys, Google tokens, and OTP codes into memory. |
+| **Prompt Injection Protection** | Null bytes and control characters are stripped. Prompt delimiters (`<<<` / `>>>`) are neutralized with zero-width spaces (`\u200B`). External emails or websites cannot trigger silent memory creation. |
+| **Strict User Isolation** | Every query and mutation enforces `WHERE user_id = :userId`. A user can never read, modify, or delete another user's memories. |
+| **Immediate Exclusion & Deletion Confirmation** | Deleted memories are immediately excluded from all searches. Deletion (`memory_delete`) enforces `requiresConfirmation: true` and supports single memory deletion or bulk "forget all". |
+
+### 14.2 Registered Tools
+
+| Tool | Permission | Side Effect | Confirmation | Description |
+|---|---|---|---|---|
+| `memory_save` | `memory:write` | `idempotent` | No | Save preference, workflow, fact, or project context (inferred = pending approval) |
+| `memory_search` | `memory:read` | `none` | No | Search user's approved memories by keyword or phrase |
+| `memory_list` | `memory:read` | `none` | No | List memories with pagination and category/status filters |
+| `memory_update` | `memory:write` | `idempotent` | No | Update memory title, content, project, or approval state |
+| `memory_delete` | `memory:write` | `non_idempotent` | **Yes** | Delete a specific memory or bulk-delete all memories |
+
+### 14.3 Configuration
+
+```env
+MEMORY_ENABLED=true
+MEMORY_MAX_RETRIEVED=5
+MEMORY_MAX_CONTEXT_CHARS=2500
+MEMORY_DEFAULT_EXPIRY_DAYS=0
+```

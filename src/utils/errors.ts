@@ -62,3 +62,10 @@ export class ExternalServiceError extends AppError {
     super(`External service error (${service}): ${message}`, 502, 'EXTERNAL_SERVICE_ERROR', true, details);
   }
 }
+
+export class ValidationError extends BadRequestError {
+  constructor(message = 'Validation Error', details?: Record<string, unknown>) {
+    super(message, details);
+    this.name = 'ValidationError';
+  }
+}
