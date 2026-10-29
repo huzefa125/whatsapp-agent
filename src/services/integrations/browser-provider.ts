@@ -1,5 +1,6 @@
 import { createBrowserTools } from '../browser/browser-tools';
 import type { BrowserService } from '../browser/browser-service';
+import { getHandoffService } from '../browser/handoff';
 import type { IntegrationProvider, IntegrationStatus } from './types';
 
 /** The generic fallback: any website the user authorizes, driven through the browser engine. */
@@ -26,6 +27,6 @@ export class BrowserIntegrationProvider implements IntegrationProvider {
   }
 
   tools() {
-    return createBrowserTools(this.service);
+    return createBrowserTools(this.service, { handoffs: getHandoffService() });
   }
 }

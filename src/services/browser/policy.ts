@@ -185,8 +185,12 @@ export class UrlPolicy {
     return this.cfg.allowPrivateNetwork;
   }
 
-  /** Parses and validates a URL. Pass `scopeHost` to also require the host to be inside a run's scope. */
-  async validate(raw: string, opts: { scopeHost?: string } = {}): Promise<URL> {
+  /**
+   * Parses and validates a URL. Pass `scopeHost` to also require the host to be inside a run's scope.
+   * `extraScopeHosts` are additional hosts that are explicitly approved for this session (e.g. an identity provider
+   * during a sign-in handoff). They are configuration, never derived from the user, the model or a page.
+   */
+  async validate(raw: string, opts: { scopeHost?: string; extraScopeHosts?: readonly string[] } = {}): Promise<URL> {
     if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_URL_LENGTH) {
       throw new UrlPolicyError('INVALID_URL', 'The URL is empty or too long.');
     }
@@ -211,7 +215,11 @@ export class UrlPolicy {
     if (this.cfg.allowedDomains.length > 0 && !this.cfg.allowedDomains.some((d) => hostMatches(host, d))) {
       throw new UrlPolicyError('HOST_NOT_ALLOWED', 'This website is not on the allowed list.');
     }
-    if (opts.scopeHost && !hostInScope(host, opts.scopeHost)) {
+    if (
+      opts.scopeHost &&
+      !hostInScope(host, opts.scopeHost) &&
+      !(opts.extraScopeHosts ?? []).some((extra) => hostInScope(host, extra))
+    ) {
       throw new UrlPolicyError('OUT_OF_SCOPE', 'That page is on a different website than this session.');
     }
 

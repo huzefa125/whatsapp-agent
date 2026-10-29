@@ -420,6 +420,68 @@ export const browserRuns = pgTable(
   ]
 );
 
+/**
+ * Browser handoffs: a short-lived, single-use grant that lets a user complete a login / MFA / CAPTCHA on their own
+ * device through a remote browser, then lets the paused agent task resume.
+ *
+ * Only SHA-256 hashes of the secrets are stored (the link token and the browser-session secret); the plaintext
+ * exists only in the link the user receives and in their cookie. Nothing here holds credentials, cookies or page
+ * content: the authenticated browser state goes to `browser_connections`, encrypted.
+ * `status`: pending (link sent) | active (opened, user is signing in) | completed | expired | cancelled | failed
+ */
+export const browserHandoffs = pgTable(
+  'browser_handoffs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id').references(() => agentTasks.id, { onDelete: 'set null' }),
+    runId: uuid('run_id').references(() => browserRuns.id, { onDelete: 'set null' }),
+    connectionId: uuid('connection_id').references(() => browserConnections.id, { onDelete: 'set null' }),
+    // The only website this handoff may show (normalized origin). Extra identity-provider hosts come from config.
+    origin: varchar('origin', { length: 255 }).notNull(),
+    // origin + path the remote browser starts on (never a query string).
+    targetUrl: text('target_url').notNull(),
+    // login | mfa | captcha
+    reason: varchar('reason', { length: 16 }).default('login').notNull(),
+    status: varchar('status', { length: 16 }).default('pending').notNull(),
+    tokenHash: varchar('token_hash', { length: 64 }).notNull(),
+    // Hash of the secret held in the user's cookie once the link has been redeemed.
+    sessionHash: varchar('session_hash', { length: 64 }),
+    idempotencyKey: varchar('idempotency_key', { length: 128 }),
+    // The link can be opened until this time.
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    // Once opened, the remote session ends at this time at the latest.
+    sessionExpiresAt: timestamp('session_expires_at', { withTimezone: true }),
+    redeemedAt: timestamp('redeemed_at', { withTimezone: true }),
+    lastActivityAt: timestamp('last_activity_at', { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    failureCode: varchar('failure_code', { length: 64 }),
+    // The WhatsApp link message was accepted by the provider.
+    linkSentAt: timestamp('link_sent_at', { withTimezone: true }),
+    // The user was told the outcome (connected / expired / cancelled / failed), exactly once.
+    resultNotifiedAt: timestamp('result_notified_at', { withTimezone: true }),
+    // The agent task created to continue the paused work.
+    resumedTaskId: uuid('resumed_task_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('browser_handoffs_token_hash_idx').on(table.tokenHash),
+    uniqueIndex('browser_handoffs_session_hash_idx').on(table.sessionHash),
+    uniqueIndex('browser_handoffs_user_idempotency_idx').on(table.userId, table.idempotencyKey),
+    index('browser_handoffs_user_status_idx').on(table.userId, table.status),
+    index('browser_handoffs_status_expires_idx').on(table.status, table.expiresAt),
+    index('browser_handoffs_run_idx').on(table.runId),
+    check(
+      'browser_handoffs_status_chk',
+      sql`${table.status} in ('pending','active','completed','expired','cancelled','failed')`
+    ),
+    check('browser_handoffs_reason_chk', sql`${table.reason} in ('login','mfa','captcha')`),
+  ]
+);
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   conversations: many(conversations),
@@ -510,3 +572,6 @@ export type NewBrowserConnection = typeof browserConnections.$inferInsert;
 
 export type BrowserRun = typeof browserRuns.$inferSelect;
 export type NewBrowserRun = typeof browserRuns.$inferInsert;
+
+export type BrowserHandoff = typeof browserHandoffs.$inferSelect;
+export type NewBrowserHandoff = typeof browserHandoffs.$inferInsert;

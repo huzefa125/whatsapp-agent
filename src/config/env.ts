@@ -102,6 +102,25 @@ const envSchema = z.object({
   // base64 of 32 random bytes. Required to store website connections (authenticated sessions).
   BROWSER_ENCRYPTION_KEY: z.string().optional().default(''),
 
+  // Secure remote browser handoff (Phase 2): the user signs in / solves MFA or CAPTCHA from their own device.
+  // Off by default. The handoff pages are served by THIS process, so PUBLIC_BASE_URL must reach it over HTTPS.
+  BROWSER_HANDOFF_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  // Public origin used in handoff links, e.g. https://assistant.example.com (no path). Required when enabled.
+  PUBLIC_BASE_URL: z.string().default(''),
+  // How long the link can be opened (single use).
+  BROWSER_HANDOFF_LINK_TTL_MINUTES: z.coerce.number().int().min(1).max(60).default(10),
+  // How long the remote sign-in session may last once opened.
+  BROWSER_HANDOFF_SESSION_MINUTES: z.coerce.number().int().min(1).max(30).default(10),
+  BROWSER_HANDOFF_IDLE_SECONDS: z.coerce.number().int().min(15).max(900).default(120),
+  BROWSER_HANDOFF_MAX_PER_HOUR: z.coerce.number().int().min(1).max(50).default(5),
+  // Extra hosts the sign-in may pass through (identity providers such as accounts.google.com). Explicit allowlist only.
+  BROWSER_HANDOFF_EXTRA_HOSTS: z.string().default(''),
+  // Number of reverse proxies in front of this app (for correct client IPs and HTTPS detection). 0 = none.
+  TRUST_PROXY: z.coerce.number().int().min(0).max(5).default(0),
+
   // Reminders & Scheduling
   REMINDER_WORKER_ENABLED: z
     .enum(['true', 'false'])
@@ -180,6 +199,13 @@ export function validateEnv(customEnv?: Record<string, unknown>): EnvConfig {
     if (config.BROWSER_ALLOW_PRIVATE_NETWORK) {
       throw new Error('Production must not set BROWSER_ALLOW_PRIVATE_NETWORK=true (it disables SSRF protection)');
     }
+    if (config.BROWSER_HANDOFF_ENABLED) {
+      if (!config.BROWSER_ENABLED) throw new Error('BROWSER_HANDOFF_ENABLED requires BROWSER_ENABLED=true');
+      if (!config.PUBLIC_BASE_URL.startsWith('https://')) {
+        throw new Error('Production with BROWSER_HANDOFF_ENABLED=true requires an https:// PUBLIC_BASE_URL');
+      }
+      if (!config.BROWSER_ENCRYPTION_KEY) throw new Error('BROWSER_HANDOFF_ENABLED requires BROWSER_ENCRYPTION_KEY');
+    }
     if (config.BROWSER_ENABLED && !config.BROWSER_BLOCK_UNCONFIRMED_MUTATIONS) {
       throw new Error('Production with BROWSER_ENABLED=true requires BROWSER_BLOCK_UNCONFIRMED_MUTATIONS=true');
     }
@@ -249,6 +275,7 @@ export function getConfig(): EnvConfig {
         AI_API_KEY: '',
         TRANSCRIBE_API_KEY: '',
         BROWSER_ENABLED: 'false',
+        BROWSER_HANDOFF_ENABLED: 'false',
         BROWSER_ALLOW_PRIVATE_NETWORK: 'false',
         // Tests exercise the Meta transport; a developer's .env must not switch it.
         WHATSAPP_PROVIDER: 'meta',

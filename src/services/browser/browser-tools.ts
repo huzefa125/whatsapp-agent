@@ -9,6 +9,7 @@ import { BrowserServiceError, type BrowserService } from './browser-service';
 import { BrowserConfigError } from './connection-service';
 import { BrowserSessionError, type BrowserSession } from './session';
 import { BrowserCapacityError } from './session-manager';
+import { HandoffError, type HandoffService } from './handoff/handoff-service';
 import type { ElementInfo, PageSnapshot, PageState, WaitReason } from './types';
 
 /**
@@ -29,8 +30,9 @@ const UNTRUSTED_NOTE =
 
 const NEEDS_USER: Record<WaitReason, string> = {
   login_required:
-    'The site needs the user to sign in. NEVER enter credentials. Tell the user to connect this website through the secure connect flow, then try again.',
-  captcha: 'A CAPTCHA / bot check is shown. The assistant cannot and must not solve it. Ask the user to complete it themselves.',
+    'The site needs the user to sign in. NEVER enter credentials and never ask for them in chat. Call browser_request_user_signin to send the user a secure link, tell them to finish signing in, then end your turn: you will be told when it is done.',
+  captcha:
+    'A CAPTCHA / bot check is shown. The assistant cannot and must not solve it. Call browser_request_user_signin with reason "captcha" so the user can complete it themselves, then end your turn.',
   blocked: 'The site refused access. Do not try to get around it. Tell the user.',
   confirmation: 'Waiting for the user to confirm.',
 };
@@ -78,6 +80,7 @@ function mapError(err: unknown): never {
   if (err instanceof BrowserSessionError) throw new ToolError(err.code, err.message);
   if (err instanceof BrowserServiceError) throw new ToolError(err.code, err.message);
   if (err instanceof BrowserCapacityError) throw new ToolError(err.code, err.message);
+  if (err instanceof HandoffError) throw new ToolError(err.code, err.message);
   if (err instanceof BrowserConfigError) throw new ToolError('BROWSER_NOT_CONFIGURED', 'Website sign-in storage is not configured.');
   logger.error({ error: describeError(err) }, 'Unexpected browser tool error');
   throw new ToolError('BROWSER_ERROR', 'The browser action failed unexpectedly.');
@@ -130,7 +133,7 @@ const closeInput = z
 type Base = Pick<ToolDefinition<any, any>, 'retry' | 'requiresConfirmation'>;
 const noRetry: Base = { retry: { maxRetries: 0, backoffMs: 0 }, requiresConfirmation: false };
 
-export function createBrowserTools(service: BrowserService): Array<ToolDefinition<any, any>> {
+export function createBrowserTools(service: BrowserService, opts: { handoffs?: HandoffService | null } = {}): Array<ToolDefinition<any, any>> {
   /** Runs a read-only step that returns a snapshot of the page afterwards. */
   const snapshotStep = (userId: string, id: string, kind: string, act?: (s: BrowserSession) => Promise<unknown>) =>
     service.step(userId, id, { kind, stateOf: (v: PageSnapshot) => v.state }, async (session) => {
@@ -461,5 +464,51 @@ export function createBrowserTools(service: BrowserService): Array<ToolDefinitio
       }),
   };
 
-  return [open, snapshot, navigate, click, fill, select, setChecked, wait, extract, screenshot, inspect, sensitive, close, listConnections];
+  const tools = [open, snapshot, navigate, click, fill, select, setChecked, wait, extract, screenshot, inspect, sensitive, close, listConnections];
+  if (opts.handoffs) tools.push(createSigninTool(opts.handoffs));
+  return tools;
+}
+
+const signinInput = z
+  .object({
+    runId,
+    reason: z.enum(['login', 'mfa', 'captcha']).default('login').describe('login, mfa (verification code) or captcha (security check)'),
+  })
+  .strict();
+
+/**
+ * Asks the USER to sign in (or finish MFA / a CAPTCHA) from their own device through a secure remote browser.
+ * The link is sent straight to the user's WhatsApp; this tool's result tells the model only that it was sent, so
+ * neither the link nor anything the user types ever enters the conversation with the model.
+ */
+function createSigninTool(handoffs: HandoffService): ToolDefinition<z.infer<typeof signinInput>, unknown> {
+  return {
+    name: 'browser_request_user_signin',
+    description:
+      'Use when a website needs a sign-in, verification code or CAPTCHA. Sends the user a secure, single-use link on WhatsApp so THEY can complete it on their own device. Never ask for passwords or codes in chat. After calling this, tell the user briefly what to do and END YOUR TURN: browser actions on this session are paused until the server verifies they are done, and you will then be asked to continue.',
+    inputSchema: signinInput,
+    permissions: ['browser:write'],
+    sideEffect: 'idempotent', // keyed by the engine's per-call key: a replay never sends a second link
+    requiresConfirmation: false,
+    retry: { maxRetries: 0, backoffMs: 0 },
+    timeoutMs: 30_000,
+    describeCall: () => 'Send you a secure sign-in link on WhatsApp',
+    execute: (input, ctx) =>
+      guard(async () => {
+        const { handoff, alreadySent } = await handoffs.createAndSend(ctx.userId, {
+          runId: input.runId,
+          taskId: ctx.taskId,
+          reason: input.reason,
+          idempotencyKey: ctx.idempotencyKey,
+        });
+        return {
+          sent: true,
+          alreadySent,
+          site: new URL(handoff.origin).host,
+          expiresInMinutes: Math.round(handoffs.settings.linkTtlMs / 60_000),
+          instruction:
+            'The user has been sent a secure link on WhatsApp. Tell them to open it and finish signing in. Do NOT ask for credentials. End your turn now; browser actions are paused until they are done.',
+        };
+      }),
+  };
 }

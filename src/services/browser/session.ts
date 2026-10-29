@@ -63,6 +63,10 @@ export interface SessionOptions {
   browser: Browser;
   policy: UrlPolicy;
   scopeHost: string;
+  /** Extra approved hosts for this session (identity providers during a sign-in handoff). Empty for agent runs. */
+  extraScopeHosts?: readonly string[] | undefined;
+  /** A person is driving this session (remote sign-in): a refused navigation puts them back on their last page. */
+  interactive?: boolean | undefined;
   config: SessionConfig;
   storageState?: StorageState | undefined;
 }
@@ -84,6 +88,8 @@ export interface ActionResult {
 }
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+/** The only non-printable keys the remote viewer may send. No modifier combinations. */
+const HUMAN_KEYS = new Set(['Enter', 'Tab', 'Backspace', 'Delete', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
 const TRANSIENT_NAV_ERRORS = /(is interrupted by another navigation|ERR_CONNECTION_RESET|ERR_CONNECTION_CLOSED|ERR_EMPTY_RESPONSE|ERR_NETWORK_CHANGED|ERR_TIMED_OUT|ERR_CONNECTION_TIMED_OUT|ERR_NAME_NOT_RESOLVED|ERR_HTTP2_PROTOCOL_ERROR)/;
 const LOGIN_PATH = /(^|\/)(log-?in|sign-?in|signin|sso|auth|authenticate|account\/login)(\/|$|\.)/i;
 const CAPTCHA_TEXT = /(verify (that )?you('re| are) (a )?human|are you a robot|complete the captcha|solve the captcha|security check to continue|checking your browser)/i;
@@ -105,6 +111,7 @@ export class BrowserSession {
   private popupsClosed = 0;
   private requestCount = 0;
   private addressViolation = false;
+  private lastGoodUrl: string | null = null;
   private closed = false;
   navigationCount = 0;
   lastActivityAt = Date.now();
@@ -122,6 +129,10 @@ export class BrowserSession {
 
   private get cfg(): SessionConfig {
     return this.opts.config;
+  }
+
+  private get scope(): { scopeHost: string; extraScopeHosts: readonly string[] } {
+    return { scopeHost: this.scopeHost, extraScopeHosts: this.opts.extraScopeHosts ?? [] };
   }
 
   private async init(): Promise<void> {
@@ -145,7 +156,10 @@ export class BrowserSession {
 
     this.page = await this.context.newPage();
     this.page.on('framenavigated', (frame) => {
-      if (frame === this.page.mainFrame()) this.navigationCount++;
+      if (frame !== this.page.mainFrame()) return;
+      this.navigationCount++;
+      if (/^https?:/.test(frame.url())) this.lastGoodUrl = frame.url();
+      else if (this.opts.interactive && frame.url().startsWith('chrome-error://')) void this.recoverFromErrorPage();
     });
     this.page.on('response', (response) => void this.onResponse(response));
     // Native dialogs would freeze the page; downloads and file pickers are never accepted.
@@ -171,7 +185,7 @@ export class BrowserSession {
 
       const isMainNavigation = request.isNavigationRequest() && request.frame() === this.page.mainFrame();
       try {
-        await this.opts.policy.validate(urlString, isMainNavigation ? { scopeHost: this.scopeHost } : {});
+        await this.opts.policy.validate(urlString, isMainNavigation ? this.scope : {});
       } catch (err) {
         if (isMainNavigation) this.blockedNavigations.push(redactUrl(urlString) || '[url]');
         logger.warn(
@@ -244,7 +258,7 @@ export class BrowserSession {
     this.assertUsable();
     let url: URL;
     try {
-      url = await this.opts.policy.validate(rawUrl, { scopeHost: this.scopeHost });
+      url = await this.opts.policy.validate(rawUrl, this.scope);
     } catch (err) {
       throw this.mapPolicyError(err);
     }
@@ -286,7 +300,7 @@ export class BrowserSession {
     const current = this.page.url();
     if (current === 'about:blank' || current.startsWith('chrome-error://')) return;
     try {
-      await this.opts.policy.validate(current, { scopeHost: this.scopeHost });
+      await this.opts.policy.validate(current, this.scope);
     } catch (err) {
       await this.page.goto('about:blank').catch(() => undefined);
       throw this.mapPolicyError(err);
@@ -629,6 +643,92 @@ export class BrowserSession {
     this.assertUsable();
     const bytes = await this.page.screenshot({ type: 'png', fullPage: false, timeout: this.cfg.actionTimeoutMs });
     return { bytes, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
+  }
+
+  // ------------------------------------------------------------------------- human (remote sign-in) input
+  // Used ONLY by the remote-browser handoff, where the USER drives the page from their own device. These take
+  // coordinates, text and a short list of keys: never selectors, scripts or URLs. The network guard, URL scope,
+  // popup/download/dialog blocking and private-address protection all still apply to everything they cause.
+
+  /** JPEG of the viewport for the remote viewer. Kept in memory; never stored or logged. */
+  async frame(quality = 55): Promise<Buffer> {
+    this.assertUsable();
+    return this.page.screenshot({ type: 'jpeg', quality, fullPage: false, timeout: this.cfg.actionTimeoutMs });
+  }
+
+  async humanClick(nx: number, ny: number): Promise<void> {
+    this.assertUsable();
+    if (!(nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1)) throw new BrowserSessionError('INVALID_INPUT', 'Click is outside the page.');
+    await this.page.mouse.click(Math.round(nx * 1280), Math.round(ny * 800));
+    await this.afterHumanInput();
+  }
+
+  /** Types text exactly as the user entered it (it may be a password or a code: it is never read back or logged). */
+  async humanType(text: string): Promise<void> {
+    this.assertUsable();
+    if (typeof text !== 'string' || text.length === 0 || text.length > 200 || /[ -]/.test(text)) {
+      throw new BrowserSessionError('INVALID_INPUT', 'That text cannot be typed.');
+    }
+    await this.page.keyboard.type(text, { delay: 10 });
+    await this.afterHumanInput();
+  }
+
+  async humanKey(key: string): Promise<void> {
+    this.assertUsable();
+    if (!HUMAN_KEYS.has(key)) throw new BrowserSessionError('INVALID_INPUT', 'That key is not allowed.');
+    await this.page.keyboard.press(key);
+    await this.afterHumanInput();
+  }
+
+  async humanScroll(deltaY: number): Promise<void> {
+    this.assertUsable();
+    if (!Number.isFinite(deltaY) || Math.abs(deltaY) > 2000) throw new BrowserSessionError('INVALID_INPUT', 'Scroll amount is out of range.');
+    await this.page.mouse.wheel(0, deltaY);
+  }
+
+  /** Lets a navigation caused by the input start, and parks the browser if it ever ended up outside the allowed hosts. */
+  private async afterHumanInput(): Promise<void> {
+    await this.page.waitForLoadState('domcontentloaded', { timeout: 1500 }).catch(() => undefined);
+    await this.verifyLocation().catch(() => undefined);
+    if (this.page.url().startsWith('chrome-error://') || this.page.url() === 'about:blank') await this.recoverFromErrorPage();
+  }
+
+  private recovering = false;
+
+  /** A navigation the guard refused (e.g. a link to another site) leaves a browser error page: put the user back. */
+  private async recoverFromErrorPage(): Promise<void> {
+    if (this.recovering || this.closed) return;
+    this.recovering = true;
+    try {
+      await this.page.goBack({ timeout: 3000 }).catch(() => undefined);
+      if (!/^https?:/.test(this.page.url()) && this.lastGoodUrl) {
+        await this.page.goto(this.lastGoodUrl, { waitUntil: 'domcontentloaded', timeout: this.cfg.navTimeoutMs }).catch(() => undefined);
+      }
+    } finally {
+      this.recovering = false;
+    }
+  }
+
+  /** Reloads the current page (GET) and waits for it, used to prove a sign-in survives a fresh request. */
+  async reload(): Promise<void> {
+    this.assertUsable();
+    try {
+      await this.page.reload({ waitUntil: 'domcontentloaded', timeout: this.cfg.navTimeoutMs });
+    } catch {
+      throw new BrowserSessionError('NAVIGATION_FAILED', 'The page could not be reloaded.');
+    }
+    await this.settle();
+    await this.verifyLocation();
+  }
+
+  /** Host of the page the browser is on right now ("" for blank or error pages). */
+  get currentHost(): string {
+    try {
+      const url = new URL(this.page.url());
+      return url.protocol === 'http:' || url.protocol === 'https:' ? url.hostname : '';
+    } catch {
+      return '';
+    }
   }
 
   async storageState(): Promise<StorageState> {

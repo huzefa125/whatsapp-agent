@@ -45,6 +45,11 @@ const toView = (c: BrowserConnection): ConnectionView => ({
 export class BrowserConnectionService {
   constructor(private readonly keyProvider: () => string = () => getConfig().BROWSER_ENCRYPTION_KEY) {}
 
+  /** Whether sessions can be stored (an encryption key is configured). */
+  isConfigured(): boolean {
+    return Boolean(this.keyProvider());
+  }
+
   private key(): string {
     const key = this.keyProvider();
     if (!key) {

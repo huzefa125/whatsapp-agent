@@ -55,12 +55,23 @@ export async function startServer(): Promise<http.Server> {
 
   // Browser automation (optional): resume interrupted runs and release idle/expired sessions in the background.
   let browserService: import('./services/browser').BrowserService | null = null;
+  let handoffService: import('./services/browser/handoff').HandoffService | null = null;
   if (config.BROWSER_ENABLED) {
     const { getBrowserService } = await import('./services/browser');
     browserService = getBrowserService();
     await browserService.recover().catch((err) => logger.error({ err }, 'Browser run recovery failed'));
     browserService.startSweeper();
     logger.info('Browser automation enabled');
+
+    // Remote sign-in handoff (optional). Remote browsers do not survive a restart, so active sign-ins are failed
+    // (and their users told); links that were never opened stay valid.
+    const { getHandoffService } = await import('./services/browser/handoff');
+    handoffService = getHandoffService();
+    if (handoffService) {
+      await handoffService.recover().catch((err) => logger.error({ err }, 'Handoff recovery failed'));
+      handoffService.startSweeper();
+      logger.info('Browser sign-in handoff enabled');
+    }
   }
 
   const app = createApp();
@@ -95,6 +106,7 @@ export async function startServer(): Promise<http.Server> {
       await agentTasks.stopWorker();
       await getReplyDispatcher().stop();
       await reminderWorker.stop();
+      handoffService?.stopSweeper();
       await browserService?.shutdown();
 
       // 2. Close HTTP server

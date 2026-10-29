@@ -43,6 +43,13 @@
       "when": 1793267243373,
       "tag": "0005_browser_automation",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793271924287,
+      "tag": "0006_browser_handoffs",
+      "breakpoints": true
     }
   ]
 }

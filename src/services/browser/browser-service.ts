@@ -17,7 +17,8 @@ export type BrowserServiceErrorCode =
   | 'RUN_DEADLINE_EXCEEDED'
   | 'OUTCOME_UNCERTAIN'
   | 'RESUME_FAILED'
-  | 'CONNECTION_EXPIRED';
+  | 'CONNECTION_EXPIRED'
+  | 'HANDOFF_IN_PROGRESS';
 
 /** Expected failure of a browser workflow. The message is safe to show the model and the user. */
 export class BrowserServiceError extends Error {
@@ -83,6 +84,13 @@ export interface StepOptions<T> {
   stateOf?: (value: T) => PageState | undefined;
 }
 
+/** Lets the service ask whether the user is signing in for a run (without depending on the handoff module). */
+export interface HandoffGate {
+  hasOpenForRun(userId: string, runId: string): Promise<boolean>;
+  /** A website was disconnected: its open sign-in links and live sign-in sessions must be revoked. */
+  revokeForOrigin(userId: string, origin: string): Promise<number>;
+}
+
 export interface StartResult {
   run: BrowserRun;
   snapshot: PageSnapshot;
@@ -98,6 +106,7 @@ export class BrowserService {
   private readonly navSeen = new Map<string, number>();
   private readonly locks = new Map<string, Promise<unknown>>();
   private sweeper: NodeJS.Timeout | null = null;
+  private gate: HandoffGate | null = null;
 
   constructor(
     readonly settings: BrowserSettings,
@@ -107,6 +116,33 @@ export class BrowserService {
     policy?: UrlPolicy
   ) {
     this.policy = policy ?? new UrlPolicy(settings.policy);
+  }
+
+  /** While a user is signing in for a run, the agent must not act on that run. */
+  setHandoffGate(gate: HandoffGate | null): void {
+    this.gate = gate;
+  }
+
+  /**
+   * Called after the server verified a completed sign-in. The run is attached to the new connection, its old
+   * browser is dropped, and the next step rebuilds the session from the checkpoint WITH the signed-in state.
+   */
+  async resumeAfterHandoff(userId: string, runId: string, connectionId: string, landingUrl?: string): Promise<void> {
+    await this.withLock(runId, async () => {
+      const run = await this.runs.get(userId, runId);
+      if (!run || TERMINAL.includes(run.status as RunStatus)) return;
+      await this.manager.close(runId);
+      this.navSeen.delete(runId);
+      await this.runs.setConnection(userId, runId, connectionId);
+      // Resume from the page the user landed on after signing in (still inside the run's scope: it is checked on use).
+      if (landingUrl) await this.runs.recordStep(userId, runId, { steps: 0, navigations: 0 }, { url: landingUrl });
+      await this.runs.transition(userId, runId, ACTIVE, 'running', { waitReason: null });
+    });
+  }
+
+  /** Records that the user was asked to sign in (or solve a challenge) for this run. */
+  async markWaitingForUser(userId: string, runId: string, reason: WaitReason): Promise<void> {
+    await this.runs.transition(userId, runId, ACTIVE, 'waiting_for_user', { waitReason: reason });
   }
 
   // ------------------------------------------------------------------------------------- starting a run
@@ -183,6 +219,12 @@ export class BrowserService {
       if (!run) throw new BrowserServiceError('RUN_NOT_FOUND', 'No such browser session. Open a page first.');
       if (TERMINAL.includes(run.status as RunStatus)) {
         throw new BrowserServiceError('RUN_ENDED', `This browser session has ended (${run.status}). Open the page again to start a new one.`);
+      }
+      if (await this.gate?.hasOpenForRun(userId, runId)) {
+        throw new BrowserServiceError(
+          'HANDOFF_IN_PROGRESS',
+          'The user is signing in right now. Do not act on this browser session. End your turn; you will be told when it is ready again.'
+        );
       }
       await this.enforceLimits(run);
 
@@ -365,8 +407,10 @@ export class BrowserService {
 
   /** Disconnects a website: erases the stored session and shuts down any live browser using it. */
   async disconnect(userId: string, connectionId: string): Promise<void> {
+    const origin = (await this.connections.list(userId)).find((c) => c.id === connectionId)?.origin;
     await this.connections.disconnect(userId, connectionId);
     await this.manager.closeByConnection(userId, connectionId);
+    if (origin) await this.gate?.revokeForOrigin(userId, origin);
   }
 
   // ------------------------------------------------------------------------------- housekeeping

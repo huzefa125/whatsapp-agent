@@ -15,6 +15,9 @@ export function createApp(): Application {
   const app = express();
   const config = getConfig();
 
+  // Behind a reverse proxy: trust its X-Forwarded-* headers so client IPs (rate limiting) and HTTPS are correct.
+  if (config.TRUST_PROXY > 0) app.set('trust proxy', config.TRUST_PROXY);
+
   // 1. Security Headers with CSP compatible with Swagger UI
   app.use(
     helmet({

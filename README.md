@@ -463,3 +463,15 @@ npm run browser:demo -- --local      # local test shop: forms, a "Send message" 
 `tests/integration/browser-{session,service,agent}.test.ts` (real Chromium against a local site that never touches the
 internet). The DB-backed ones need `TEST_DATABASE_URL` (a database whose name contains "test"); all are skipped, not failed,
 when Chromium or the test DB is missing.
+
+## 12. Secure Remote Browser Handoff (Phase 2)
+
+Lets a user sign in, pass MFA or complete a CAPTCHA on their own device through a short-lived, single-use link sent on
+WhatsApp, after which the paused agent task resumes. Off by default (`BROWSER_HANDOFF_ENABLED=false`). The AI never sees the
+link, credentials, codes or cookies; the session is stored encrypted. Full architecture, the single-server vs. separate-worker
+evaluation, reverse-proxy/HTTPS/cookie/CSRF requirements and the safe local demo are in
+[`docs/remote-browser-handoff.md`](docs/remote-browser-handoff.md).
+
+```bash
+npm run browser:handoff-demo     # local test site, printed link instead of WhatsApp, throwaway user
+```

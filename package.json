@@ -19,7 +19,8 @@
     "browser:demo": "tsx src/scripts/browser-demo.ts",
     "browser:connect": "tsx src/scripts/browser-connect.ts",
     "browser:genkey": "node -e \"console.log(require('crypto').randomBytes(32).toString('base64'))\"",
-    "browser:install": "playwright install chromium"
+    "browser:install": "playwright install chromium",
+    "browser:handoff-demo": "tsx src/scripts/browser-handoff-demo.ts"
   },
   "keywords": [
     "whatsapp",

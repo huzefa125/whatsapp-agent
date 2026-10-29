@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/errors';
 import { logger } from '../utils/logger';
 import { getConfig } from '../config/env';
+import { redactPath } from '../utils/redact-path';
 
 export function errorHandler(
   err: Error,
@@ -20,7 +21,7 @@ export function errorHandler(
           err,
           code: err.code,
           details: err.details,
-          path: req.originalUrl,
+          path: redactPath(req.originalUrl),
           method: req.method,
         },
         'Operational error occurred'
@@ -31,7 +32,7 @@ export function errorHandler(
           requestId,
           code: err.code,
           message: err.message,
-          path: req.originalUrl,
+          path: redactPath(req.originalUrl),
           method: req.method,
         },
         'Client request error'
@@ -64,7 +65,7 @@ export function errorHandler(
     {
       requestId,
       err,
-      path: req.originalUrl,
+      path: redactPath(req.originalUrl),
       method: req.method,
     },
     'Unhandled server error occurred'

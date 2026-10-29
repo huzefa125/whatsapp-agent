@@ -38,6 +38,21 @@ export async function startTestSite(): Promise<TestSite> {
         if (url.pathname === '/send') {
           return html(200, page('Sent', '<h1>Thank you</h1><p>Your message has been sent. Confirmation number MSG-1001.</p>'));
         }
+        if (url.pathname === '/login') {
+          // A working demo login: the right password sets the session cookie, anything else shows the form again.
+          const form = new URLSearchParams(body);
+          if (form.get('password') === 'correct-horse') {
+            return html(302, '', { location: '/account', 'set-cookie': 'sid=valid-session; Path=/; HttpOnly' });
+          }
+          return html(
+            200,
+            page(
+              'Sign in',
+              `<h1>Sign in</h1><p>Invalid credentials.</p><form action="/login" method="post"><label for="u">Email</label><input id="u" name="email" type="text">
+               <label for="p">Password</label><input id="p" name="password" type="password"><button type="submit">Sign in</button></form>`
+            )
+          );
+        }
         if (url.pathname === '/order') {
           return html(200, page('Order placed', '<h1>Order confirmed</h1><p>Order number ORD-7788</p>'));
         }

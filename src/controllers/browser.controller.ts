@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { getConfig } from '../config/env';
 import { getBrowserService } from '../services/browser';
+import { getHandoffService } from '../services/browser/handoff';
 import { BadRequestError, NotFoundError, UnauthorizedError } from '../utils/errors';
 
 const idSchema = z.string().uuid('A valid id is required');
@@ -69,6 +70,30 @@ export class BrowserController {
       res.status(200).json({ disconnected: true });
     } catch (err) {
       next(err);
+    }
+  }
+
+  /** GET /api/browser/handoffs: the caller's own sign-in requests and their status (never any link or token). */
+  static async listHandoffs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = authenticatedUserId(req);
+      const handoffs = (await getHandoffService()?.list(userId)) ?? [];
+      res.status(200).json({ handoffs });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** POST /api/browser/handoffs/:id/cancel */
+  static async cancelHandoff(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = authenticatedUserId(req);
+      const service = getHandoffService();
+      if (!service) throw new NotFoundError('Sign-in not found');
+      await service.cancel(userId, parseOrThrow(idSchema, req.params['id']));
+      res.status(200).json({ cancelled: true });
+    } catch (err) {
+      next(err instanceof Error && err.name === 'HandoffError' ? new NotFoundError('Sign-in not found') : err);
     }
   }
 
