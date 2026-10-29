@@ -21,6 +21,14 @@ const envSchema = z.object({
   WHATSAPP_PHONE_NUMBER_ID: z.string().min(1, 'WHATSAPP_PHONE_NUMBER_ID is required'),
   WHATSAPP_API_VERSION: z.string().default('v21.0'),
 
+  // WhatsApp transport: 'meta' = Cloud API direct, 'ycloud' = YCloud (BSP) API + webhooks
+  WHATSAPP_PROVIDER: z.enum(['meta', 'ycloud']).default('meta'),
+  YCLOUD_API_KEY: z.string().optional().default(''),
+  // Your WhatsApp business number registered in YCloud, E.164 (e.g. +15551234567)
+  YCLOUD_WHATSAPP_FROM: z.string().optional().default(''),
+  // Signing secret of the YCloud webhook endpoint (Dashboard -> Developers -> Webhooks)
+  YCLOUD_WEBHOOK_SECRET: z.string().optional().default(''),
+
   // AI Provider
   AI_PROVIDER: z.enum(['openai', 'groq', 'gemini', 'stub']).default('openai'),
   AI_API_KEY: z.string().optional().default(''),
@@ -126,6 +134,11 @@ export function validateEnv(customEnv?: Record<string, unknown>): EnvConfig {
     if (!config.WHATSAPP_ACCESS_TOKEN || config.WHATSAPP_ACCESS_TOKEN === 'your_system_user_access_token_here') {
       throw new Error('Production environment requires a real WHATSAPP_ACCESS_TOKEN');
     }
+    if (config.WHATSAPP_PROVIDER === 'ycloud') {
+      if (!config.YCLOUD_API_KEY || !config.YCLOUD_WHATSAPP_FROM || !config.YCLOUD_WEBHOOK_SECRET) {
+        throw new Error('Production with WHATSAPP_PROVIDER=ycloud requires YCLOUD_API_KEY, YCLOUD_WHATSAPP_FROM, and YCLOUD_WEBHOOK_SECRET');
+      }
+    }
     if (config.AI_PROVIDER !== 'stub' && (!config.AI_API_KEY || config.AI_API_KEY.startsWith('your_'))) {
       throw new Error('Production environment requires a valid AI_API_KEY for the chosen AI_PROVIDER');
     }
@@ -155,6 +168,8 @@ export function getSafeConfig(config: EnvConfig): Record<string, unknown> {
     WHATSAPP_APP_SECRET: config.WHATSAPP_APP_SECRET ? '[REDACTED_SECRET]' : undefined,
     WHATSAPP_ACCESS_TOKEN: config.WHATSAPP_ACCESS_TOKEN ? '[REDACTED_TOKEN]' : undefined,
     WHATSAPP_VERIFY_TOKEN: config.WHATSAPP_VERIFY_TOKEN ? '[REDACTED_VERIFY_TOKEN]' : undefined,
+    YCLOUD_API_KEY: config.YCLOUD_API_KEY ? '[REDACTED_YCLOUD_KEY]' : undefined,
+    YCLOUD_WEBHOOK_SECRET: config.YCLOUD_WEBHOOK_SECRET ? '[REDACTED_YCLOUD_SECRET]' : undefined,
     AI_API_KEY: config.AI_API_KEY ? '[REDACTED_AI_KEY]' : undefined,
     AUTH_OTP_HMAC_SECRET: config.AUTH_OTP_HMAC_SECRET ? '[REDACTED_AUTH_SECRET]' : undefined,
     SMTP_PASS: config.SMTP_PASS ? '[REDACTED_SMTP_PASS]' : undefined,
@@ -181,6 +196,8 @@ export function getConfig(): EnvConfig {
         // Hard guard: a developer's real .env must never make the test suite call a paid model.
         AI_PROVIDER: 'stub',
         AI_API_KEY: '',
+        // Tests exercise the Meta transport; a developer's .env must not switch it.
+        WHATSAPP_PROVIDER: 'meta',
       });
     } else {
       cachedConfig = validateEnv();

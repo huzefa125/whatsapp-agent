@@ -1,6 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
 import { getConfig } from '../config/env';
-import { verifyWebhookChallenge, verifyWebhookSignature, parseWebhookPayload } from '../services/whatsapp/webhook';
+import {
+  verifyWebhookChallenge,
+  verifyWebhookSignature,
+  parseWebhookPayload,
+  parseYCloudPayload,
+} from '../services/whatsapp/webhook';
+import { verifyYCloudSignature } from '../utils/crypto';
 import { getOutboxService } from '../services/queue/outbox';
 import { getReminderService } from '../services/reminders/reminder-service';
 import { ForbiddenError } from '../utils/errors';
@@ -36,31 +42,31 @@ export class WebhookController {
   static async handleEvent(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const config = getConfig();
-      const signatureHeader = req.headers['x-hub-signature-256'] as string | undefined;
+      const isYCloud = config.WHATSAPP_PROVIDER === 'ycloud';
+      const signatureHeaderName = isYCloud ? 'YCloud-Signature' : 'X-Hub-Signature-256';
+      const signatureHeader = req.headers[signatureHeaderName.toLowerCase()] as string | undefined;
       const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body || {}));
 
       // Signature verification
-      const isSignatureValid = verifyWebhookSignature(
-        rawBody,
-        signatureHeader,
-        config.WHATSAPP_APP_SECRET
-      );
+      const isSignatureValid = isYCloud
+        ? verifyYCloudSignature(rawBody, signatureHeader, config.YCLOUD_WEBHOOK_SECRET)
+        : verifyWebhookSignature(rawBody, signatureHeader, config.WHATSAPP_APP_SECRET);
 
       if (!isSignatureValid) {
         if (config.NODE_ENV === 'production') {
-          logger.error('Rejecting webhook: invalid or missing X-Hub-Signature-256 in production');
+          logger.error(`Rejecting webhook: invalid or missing ${signatureHeaderName} in production`);
           throw new ForbiddenError('Invalid webhook signature');
         } else if (signatureHeader) {
           // If signature header was provided in dev/test, enforce validity
           logger.warn('Webhook signature mismatch in non-production environment');
           throw new ForbiddenError('Invalid webhook signature');
         } else {
-          logger.warn('Webhook accepted without X-Hub-Signature-256 in development/test mode');
+          logger.warn(`Webhook accepted without ${signatureHeaderName} in development/test mode`);
         }
       }
 
       // Parse payload
-      const events = parseWebhookPayload(req.body);
+      const events = isYCloud ? parseYCloudPayload(req.body) : parseWebhookPayload(req.body);
       const outbox = getOutboxService();
 
       for (const event of events) {

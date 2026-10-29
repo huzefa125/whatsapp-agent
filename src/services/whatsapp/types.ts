@@ -40,6 +40,30 @@ export interface MetaWebhookPayload {
   }>;
 }
 
+export interface YCloudWebhookEvent {
+  id?: string;
+  type: string;
+  whatsappInboundMessage?: {
+    id: string;
+    wamid?: string;
+    from: string;
+    to?: string;
+    sendTime?: string;
+    type: string;
+    customerProfile?: { name?: string };
+    text?: { body: string };
+  };
+  whatsappMessage?: {
+    id: string;
+    wamid?: string;
+    status: string;
+    to?: string;
+    createTime?: string;
+    errorCode?: string;
+    errorMessage?: string;
+  };
+}
+
 export type ParsedInboundEventType = 'text_message' | 'unsupported_media' | 'status_update' | 'ignored';
 
 export interface ParsedTextMessageEvent {

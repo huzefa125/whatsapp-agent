@@ -212,11 +212,19 @@ export function getWhatsAppClient(): IWhatsAppClient {
   if (!activeWhatsAppClient) {
     const { getConfig } = require('../../config/env');
     const config = getConfig();
-    activeWhatsAppClient = new WhatsAppClient({
-      accessToken: config.WHATSAPP_ACCESS_TOKEN,
-      phoneNumberId: config.WHATSAPP_PHONE_NUMBER_ID,
-      apiVersion: config.WHATSAPP_API_VERSION,
-    });
+    if (config.WHATSAPP_PROVIDER === 'ycloud') {
+      const { YCloudClient } = require('./ycloud-client') as typeof import('./ycloud-client');
+      activeWhatsAppClient = new YCloudClient({
+        apiKey: config.YCLOUD_API_KEY,
+        from: config.YCLOUD_WHATSAPP_FROM,
+      });
+    } else {
+      activeWhatsAppClient = new WhatsAppClient({
+        accessToken: config.WHATSAPP_ACCESS_TOKEN,
+        phoneNumberId: config.WHATSAPP_PHONE_NUMBER_ID,
+        apiVersion: config.WHATSAPP_API_VERSION,
+      });
+    }
   }
   return activeWhatsAppClient;
 }

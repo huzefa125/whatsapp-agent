@@ -4,6 +4,7 @@ import {
   ParsedTextMessageEvent,
   ParsedUnsupportedMediaEvent,
   ParsedStatusEvent,
+  YCloudWebhookEvent,
 } from './types';
 import { verifyMetaSignature } from '../../utils/crypto';
 import { logger } from '../../utils/logger';
@@ -36,6 +37,73 @@ export function verifyWebhookSignature(
   appSecret: string
 ): boolean {
   return verifyMetaSignature(rawBody, signatureHeader, appSecret);
+}
+
+/**
+ * Parses a YCloud webhook event into the same ParsedWebhookEvent shape as the Meta parser.
+ * Handles `whatsapp.inbound_message.received` and `whatsapp.message.updated`.
+ */
+export function parseYCloudPayload(payload: unknown): ParsedWebhookEvent[] {
+  if (!payload || typeof payload !== 'object') {
+    return [{ type: 'ignored', reason: 'Payload is not an object' }];
+  }
+  const evt = payload as YCloudWebhookEvent;
+
+  if (evt.type === 'whatsapp.inbound_message.received' && evt.whatsappInboundMessage) {
+    const msg = evt.whatsappInboundMessage;
+    const providerMessageId = msg.wamid || msg.id;
+    const senderPhoneNumber = (msg.from || '').replace(/\D/g, '');
+    const timestamp = msg.sendTime ? new Date(msg.sendTime) : new Date();
+    const phoneNumberId = (msg.to || '').replace(/\D/g, '');
+    const senderName = msg.customerProfile?.name;
+
+    if (msg.type === 'text' && typeof msg.text?.body === 'string') {
+      return [{
+        type: 'text_message',
+        providerMessageId,
+        senderPhoneNumber,
+        senderName,
+        text: msg.text.body,
+        timestamp,
+        phoneNumberId,
+        raw: msg,
+      }];
+    }
+    return [{
+      type: 'unsupported_media',
+      providerMessageId,
+      senderPhoneNumber,
+      senderName,
+      mediaType: msg.type || 'unknown',
+      timestamp,
+      phoneNumberId,
+      raw: msg,
+    }];
+  }
+
+  if (evt.type === 'whatsapp.message.updated' && evt.whatsappMessage) {
+    const m = evt.whatsappMessage;
+    const status = m.status === 'failed' ? 'failed'
+      : m.status === 'read' ? 'read'
+      : m.status === 'delivered' ? 'delivered'
+      : m.status === 'sent' || m.status === 'accepted' ? 'sent'
+      : null;
+    if (!status) return [{ type: 'ignored', reason: `Ignored YCloud status: ${m.status}` }];
+
+    return [{
+      type: 'status_update',
+      providerMessageId: m.wamid || m.id,
+      recipientPhoneNumber: (m.to || '').replace(/\D/g, ''),
+      status,
+      timestamp: m.createTime ? new Date(m.createTime) : new Date(),
+      errors: status === 'failed'
+        ? [{ code: Number(m.errorCode) || 0, title: m.errorMessage || 'Message failed', message: m.errorMessage }]
+        : undefined,
+      raw: m,
+    }];
+  }
+
+  return [{ type: 'ignored', reason: `Ignored YCloud event type: ${evt.type}` }];
 }
 
 /**

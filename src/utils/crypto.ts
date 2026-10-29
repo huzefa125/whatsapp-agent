@@ -1,6 +1,40 @@
 import crypto from 'crypto';
 
 /**
+ * Validates YCloud's `YCloud-Signature: t=<unix>,s=<hex>` header (HMAC-SHA256 of `${t}.${rawBody}`).
+ * Rejects timestamps older than `toleranceSeconds` to limit replay.
+ */
+export function verifyYCloudSignature(
+  rawBody: Buffer | string,
+  signatureHeader: string | undefined,
+  secret: string,
+  toleranceSeconds = 300,
+  nowMs: number = Date.now()
+): boolean {
+  if (!signatureHeader || !secret) return false;
+
+  const parts = Object.fromEntries(
+    signatureHeader.split(',').map((p) => {
+      const i = p.indexOf('=');
+      return [p.slice(0, i).trim(), p.slice(i + 1).trim()];
+    })
+  );
+  const t = parts['t'];
+  const s = parts['s'];
+  if (!t || !s || s.length !== 64 || !/^\d+$/.test(t)) return false;
+  if (Math.abs(nowMs / 1000 - Number(t)) > toleranceSeconds) return false;
+
+  try {
+    const bodyStr = Buffer.isBuffer(rawBody) ? rawBody.toString('utf8') : rawBody;
+    const expected = crypto.createHmac('sha256', secret).update(`${t}.${bodyStr}`).digest();
+    const received = Buffer.from(s, 'hex');
+    return received.length === expected.length && crypto.timingSafeEqual(expected, received);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Validates Meta's X-Hub-Signature-256 header using timingSafeEqual to prevent timing attacks.
  *
  * @param rawBody - The raw, unparsed request payload Buffer or string.
