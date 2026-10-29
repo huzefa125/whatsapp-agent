@@ -52,6 +52,7 @@ export interface YCloudWebhookEvent {
     type: string;
     customerProfile?: { name?: string };
     text?: { body: string };
+    audio?: { id?: string; link?: string; mime_type?: string; voice?: boolean };
   };
   whatsappMessage?: {
     id: string;
@@ -71,7 +72,10 @@ export interface ParsedTextMessageEvent {
   providerMessageId: string;
   senderPhoneNumber: string;
   senderName?: string;
+  /** Empty for a voice note until it is transcribed (see `audio`). */
   text: string;
+  /** Set for voice notes: the channel transcribes it into `text` after verifying the sender. */
+  audio?: { url: string; mimeType?: string };
   timestamp: Date;
   phoneNumberId: string;
   raw: unknown;

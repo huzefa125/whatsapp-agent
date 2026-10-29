@@ -29,6 +29,12 @@ const envSchema = z.object({
   // Signing secret of the YCloud webhook endpoint (Dashboard -> Developers -> Webhooks)
   YCLOUD_WEBHOOK_SECRET: z.string().optional().default(''),
 
+  // Voice note transcription. Leave the key empty to disable voice notes.
+  // gemini: model e.g. gemini-3.5-flash | groq: model e.g. whisper-large-v3-turbo
+  TRANSCRIBE_PROVIDER: z.enum(['gemini', 'groq']).default('gemini'),
+  TRANSCRIBE_API_KEY: z.string().optional().default(''),
+  TRANSCRIBE_MODEL: z.string().default('gemini-3.5-flash'),
+
   // AI Provider
   AI_PROVIDER: z.enum(['openai', 'groq', 'gemini', 'stub']).default('openai'),
   AI_API_KEY: z.string().optional().default(''),
@@ -168,6 +174,7 @@ export function getSafeConfig(config: EnvConfig): Record<string, unknown> {
     WHATSAPP_APP_SECRET: config.WHATSAPP_APP_SECRET ? '[REDACTED_SECRET]' : undefined,
     WHATSAPP_ACCESS_TOKEN: config.WHATSAPP_ACCESS_TOKEN ? '[REDACTED_TOKEN]' : undefined,
     WHATSAPP_VERIFY_TOKEN: config.WHATSAPP_VERIFY_TOKEN ? '[REDACTED_VERIFY_TOKEN]' : undefined,
+    TRANSCRIBE_API_KEY: config.TRANSCRIBE_API_KEY ? '[REDACTED_TRANSCRIBE_KEY]' : undefined,
     YCLOUD_API_KEY: config.YCLOUD_API_KEY ? '[REDACTED_YCLOUD_KEY]' : undefined,
     YCLOUD_WEBHOOK_SECRET: config.YCLOUD_WEBHOOK_SECRET ? '[REDACTED_YCLOUD_SECRET]' : undefined,
     AI_API_KEY: config.AI_API_KEY ? '[REDACTED_AI_KEY]' : undefined,
@@ -196,6 +203,7 @@ export function getConfig(): EnvConfig {
         // Hard guard: a developer's real .env must never make the test suite call a paid model.
         AI_PROVIDER: 'stub',
         AI_API_KEY: '',
+        TRANSCRIBE_API_KEY: '',
         // Tests exercise the Meta transport; a developer's .env must not switch it.
         WHATSAPP_PROVIDER: 'meta',
       });

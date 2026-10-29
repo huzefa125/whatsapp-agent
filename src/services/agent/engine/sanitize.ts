@@ -1,3 +1,5 @@
+import { toWhatsAppFormat } from '../../../utils/whatsapp-format';
+
 const SECRET_PATTERNS: RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*/gi,
   /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}/g,
@@ -55,5 +57,5 @@ export function wrapToolResultForModel(name: string, serialized: string): string
 }
 
 export function sanitizeFinalResponse(text: string, maxChars: number): string {
-  return truncate(scrubText(text.replace(/\0/g, '')).trim(), maxChars);
+  return truncate(toWhatsAppFormat(scrubText(text.replace(/\0/g, ''))).trim(), maxChars);
 }

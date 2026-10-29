@@ -69,6 +69,20 @@ export function parseYCloudPayload(payload: unknown): ParsedWebhookEvent[] {
         raw: msg,
       }];
     }
+    // Voice notes / audio: queued like text, transcribed later once the sender is known to be verified.
+    if (msg.type === 'audio' && msg.audio?.link) {
+      return [{
+        type: 'text_message',
+        providerMessageId,
+        senderPhoneNumber,
+        senderName,
+        text: '',
+        audio: { url: msg.audio.link, mimeType: msg.audio.mime_type },
+        timestamp,
+        phoneNumberId,
+        raw: msg,
+      }];
+    }
     return [{
       type: 'unsupported_media',
       providerMessageId,

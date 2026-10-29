@@ -7,9 +7,12 @@ import { logger } from '../../../utils/logger';
 import { getWhatsAppClient, IWhatsAppClient } from '../../whatsapp/client';
 import type { ParsedTextMessageEvent } from '../../whatsapp/types';
 import { AgentTaskService, getAgentTaskService } from '../engine/task-service';
+import { getTranscriber, Transcriber } from '../../transcription';
 
 export const NOT_REGISTERED_REPLY =
   "Hi! I don't recognise this number yet. Please finish signing up (verify your WhatsApp number and email) and then message me again.";
+export const VOICE_DISABLED_REPLY = "Voice notes aren't enabled yet. Please type your message.";
+export const VOICE_UNCLEAR_REPLY = "Sorry, I couldn't make out that voice note. Could you try again or type it?";
 export const TOO_LONG_REPLY = 'That message is too long for me to handle. Could you shorten it or split it up?';
 
 const YES = new Set(['yes', 'y', 'yeah', 'yep', 'yup', 'ok', 'okay', 'sure', 'confirm', 'confirmed', 'go ahead', 'do it', '👍']);
@@ -33,12 +36,13 @@ export function parseDecision(text: string): 'approve' | 'reject' | null {
 export class WhatsAppChannel {
   constructor(
     private readonly tasks: AgentTaskService = getAgentTaskService(),
-    private readonly client: IWhatsAppClient = getWhatsAppClient()
+    private readonly client: IWhatsAppClient = getWhatsAppClient(),
+    private readonly transcriber: Transcriber | null = null
   ) {}
 
   async handleInbound(event: ParsedTextMessageEvent): Promise<void> {
-    const text = event.text.replace(/\0/g, '').trim();
-    if (!text) return;
+    let text = event.text.replace(/\0/g, '').trim();
+    if (!text && !event.audio) return;
 
     let phone: string;
     try {
@@ -57,6 +61,22 @@ export class WhatsAppChannel {
 
     const wamid = event.providerMessageId;
     const repo = this.tasks.repo;
+
+    // Voice note: turn it into text only now that the sender is verified (no API spend for strangers).
+    if (!text && event.audio) {
+      const transcriber = this.transcriber ?? getTranscriber();
+      if (!transcriber) {
+        await this.say(phone, VOICE_DISABLED_REPLY);
+        return;
+      }
+      // A transcription failure throws, so the outbox retries the whole (idempotent) job.
+      text = (await transcriber.transcribe(event.audio)).replace(/\0/g, '').trim();
+      logger.info({ messageId: wamid, chars: text.length }, 'Voice note transcribed');
+      if (!text) {
+        await this.say(phone, VOICE_UNCLEAR_REPLY);
+        return;
+      }
+    }
 
     // 1. A confirmation is pending: this message answers it.
     const awaiting = await repo.latestForUser(user.id, 'whatsapp', ['awaiting_confirmation']);
