@@ -482,12 +482,94 @@ export const browserHandoffs = pgTable(
   ]
 );
 
+/**
+ * Gmail connections: one row per linked Google account per user.
+ * The refresh token is stored encrypted at rest; access tokens are transient.
+ * `status`: connected | expired | revoked
+ */
+export const gmailConnections = pgTable(
+  'gmail_connections',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    googleEmail: varchar('google_email', { length: 255 }).notNull(),
+    scopes: text('scopes').notNull(),
+    encryptedRefreshToken: text('encrypted_refresh_token').notNull(),
+    status: varchar('status', { length: 16 }).default('connected').notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('gmail_connections_user_email_idx').on(table.userId, table.googleEmail),
+    index('gmail_connections_user_status_idx').on(table.userId, table.status),
+    check('gmail_connections_status_chk', sql`${table.status} in ('connected','expired','revoked')`),
+  ]
+);
+
+/**
+ * Gmail OAuth state: CSRF protection and PKCE code_verifier for the authorization flow.
+ * Rows are short-lived (10 min TTL) and single-use.
+ */
+export const gmailOauthStates = pgTable(
+  'gmail_oauth_states',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    state: varchar('state', { length: 128 }).notNull(),
+    codeVerifier: varchar('code_verifier', { length: 128 }).notNull(),
+    requestedScopes: text('requested_scopes').notNull(),
+    redirectUri: text('redirect_uri').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('gmail_oauth_states_state_idx').on(table.state),
+    index('gmail_oauth_states_expires_idx').on(table.expiresAt),
+  ]
+);
+
+/**
+ * Gmail send log: every email we send is recorded with an idempotency key
+ * so that retries and tool replays cannot duplicate a send.
+ */
+export const gmailSendLog = pgTable(
+  'gmail_send_log',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => gmailConnections.id, { onDelete: 'cascade' }),
+    idempotencyKey: varchar('idempotency_key', { length: 128 }).notNull(),
+    messageId: varchar('message_id', { length: 255 }),
+    threadId: varchar('thread_id', { length: 255 }),
+    recipient: text('recipient').notNull(),
+    subject: text('subject').notNull(),
+    status: varchar('status', { length: 16 }).default('sent').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('gmail_send_log_user_idempotency_idx').on(table.userId, table.idempotencyKey),
+    index('gmail_send_log_connection_idx').on(table.connectionId),
+  ]
+);
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   conversations: many(conversations),
   messages: many(messages),
   sessions: many(sessions),
   authFlows: many(authFlows),
+  gmailConnections: many(gmailConnections),
 }));
 
 export const authFlowsRelations = relations(authFlows, ({ one, many }) => ({
@@ -528,6 +610,25 @@ export const messagesRelations = relations(messages, ({ one }) => ({
   user: one(users, {
     fields: [messages.userId],
     references: [users.id],
+  }),
+}));
+
+export const gmailConnectionsRelations = relations(gmailConnections, ({ one, many }) => ({
+  user: one(users, {
+    fields: [gmailConnections.userId],
+    references: [users.id],
+  }),
+  sendLogs: many(gmailSendLog),
+}));
+
+export const gmailSendLogRelations = relations(gmailSendLog, ({ one }) => ({
+  user: one(users, {
+    fields: [gmailSendLog.userId],
+    references: [users.id],
+  }),
+  connection: one(gmailConnections, {
+    fields: [gmailSendLog.connectionId],
+    references: [gmailConnections.id],
   }),
 }));
 
@@ -575,3 +676,12 @@ export type NewBrowserRun = typeof browserRuns.$inferInsert;
 
 export type BrowserHandoff = typeof browserHandoffs.$inferSelect;
 export type NewBrowserHandoff = typeof browserHandoffs.$inferInsert;
+
+export type GmailConnection = typeof gmailConnections.$inferSelect;
+export type NewGmailConnection = typeof gmailConnections.$inferInsert;
+
+export type GmailOauthState = typeof gmailOauthStates.$inferSelect;
+export type NewGmailOauthState = typeof gmailOauthStates.$inferInsert;
+
+export type GmailSendLogEntry = typeof gmailSendLog.$inferSelect;
+export type NewGmailSendLogEntry = typeof gmailSendLog.$inferInsert;

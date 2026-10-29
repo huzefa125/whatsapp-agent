@@ -10,6 +10,10 @@ let registry: IntegrationRegistry | null = null;
 export function getIntegrations(): IntegrationRegistry {
   if (!registry) {
     registry = new IntegrationRegistry();
+    if (getConfig().GMAIL_ENABLED) {
+      const { getGmailOAuth, getGmailApi, GmailIntegrationProvider } = require('../gmail') as typeof import('../gmail');
+      registry.register(new GmailIntegrationProvider(getGmailOAuth(), getGmailApi()));
+    }
     if (getConfig().BROWSER_ENABLED) {
       // Loaded lazily so the browser stack costs nothing when the feature is off.
       const { getBrowserService } = require('../browser') as typeof import('../browser');

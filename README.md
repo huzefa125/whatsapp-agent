@@ -475,3 +475,42 @@ evaluation, reverse-proxy/HTTPS/cookie/CSRF requirements and the safe local demo
 ```bash
 npm run browser:handoff-demo     # local test site, printed link instead of WhatsApp, throwaway user
 ```
+
+## 13. Gmail Integration (Phase 3)
+
+Direct Google OAuth 2.0 and Gmail API integration. Plugs into the `IntegrationRegistry` so the agent automatically uses fast, structured API tools for email workflows instead of falling back to browser automation.
+
+### 13.1 Security & Architecture Highlights
+
+| Area | Implementation |
+|---|---|
+| **Least privilege scopes** | Read-only by default (`userinfo.email`, `gmail.readonly`). Write/send scopes (`gmail.send`, `gmail.compose`) are requested only when the user explicitly enables email sending. |
+| **Google OAuth 2.0 + PKCE** | Uses Google's official authorization code flow with SHA-256 PKCE code challenges and randomized CSRF state tokens stored in DB with a 10-minute expiry and one-time use check. |
+| **No credentials in WhatsApp** | Users are NEVER asked for passwords or verification codes in chat. The assistant generates a secure Google OAuth consent link for the user to authorize in their browser. |
+| **Encrypted at rest** | Refresh tokens are encrypted using AES-256-GCM (`v1.<iv>.<tag>.<ciphertext>`) bound to the user's ID via authenticated additional data (`gmail:<userId>`). Access tokens are transient and auto-refreshed in memory. |
+| **Duplicate send protection** | `gmail_send_draft` enforces `non_idempotent` classification, `requiresConfirmation=true`, zero automatic retries, and records sends in `gmail_send_log` with the engine's stable `idempotencyKey`. |
+| **Draft-first workflow** | All email sends require creating a draft first (`gmail_draft` or `gmail_reply`). The agent presents recipient, subject, and body to the user for explicit confirmation before triggering `gmail_send_draft`. |
+| **Prompt injection defense** | Email bodies are treated as untrusted data: control characters stripped, model delimiters (`<<<`, `>>>`) neutralized with zero-width spaces, and body lengths capped to prevent context overflow. |
+
+### 13.2 Registered Tools
+
+| Tool | Permission | Side Effect | Confirmation | Description |
+|---|---|---|---|---|
+| `gmail_search` | `gmail:read` | `none` | No | Search inbox with standard Gmail operators (`from:`, `is:unread`, etc.) |
+| `gmail_read` | `gmail:read` | `none` | No | Read email headers and sanitized plain text body |
+| `gmail_summarize_thread` | `gmail:read` | `none` | No | Fetch all messages in a thread for conversation summarization |
+| `gmail_draft` | `gmail:write` | `idempotent` | No | Create an email draft without sending |
+| `gmail_send_draft` | `gmail:send` | `non_idempotent` | **Yes** | Send an approved draft; idempotency-protected |
+| `gmail_reply` | `gmail:write` | `idempotent` | No | Create a reply draft matching thread and subject |
+| `gmail_list_thread` | `gmail:read` | `none` | No | List thread metadata and participants |
+| `gmail_status` | `gmail:read` | `none` | No | Check account connection status and linked address |
+
+### 13.3 Configuration
+
+```env
+GMAIL_ENABLED=true
+GMAIL_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+GMAIL_CLIENT_SECRET=your-google-client-secret
+GMAIL_REDIRECT_URI=http://localhost:3000/api/gmail/oauth/callback
+GMAIL_ENCRYPTION_KEY=<32-byte-base64-key>
+```

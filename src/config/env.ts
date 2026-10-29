@@ -167,6 +167,21 @@ const envSchema = z.object({
   SMTP_PASS: z.string().optional(),
   SMTP_FROM: z.string().email().optional().default('noreply@instinct-agent.local'),
   SMTP_SECURE: z.coerce.boolean().optional().default(false),
+
+  // Gmail Integration (OAuth 2.0 + Gmail API)
+  GMAIL_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  GMAIL_CLIENT_ID: z.string().optional().default(''),
+  GMAIL_CLIENT_SECRET: z.string().optional().default(''),
+  GMAIL_REDIRECT_URI: z.string().optional().default(''),
+  // base64 of 32 random bytes. Required to encrypt refresh tokens at rest.
+  GMAIL_ENCRYPTION_KEY: z.string().optional().default(''),
+  // OAuth state TTL in minutes (how long a user has to complete the authorization flow).
+  GMAIL_OAUTH_STATE_TTL_MINUTES: z.coerce.number().int().min(1).max(30).default(10),
+  // Maximum emails returned per search.
+  GMAIL_MAX_RESULTS: z.coerce.number().int().min(1).max(50).default(10),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
@@ -228,6 +243,17 @@ export function validateEnv(customEnv?: Record<string, unknown>): EnvConfig {
         throw new Error('Production environment with EMAIL_PROVIDER=smtp requires SMTP_HOST, SMTP_USER, and SMTP_PASS');
       }
     }
+    if (config.GMAIL_ENABLED) {
+      if (!config.GMAIL_CLIENT_ID || !config.GMAIL_CLIENT_SECRET) {
+        throw new Error('Production with GMAIL_ENABLED=true requires GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET');
+      }
+      if (!config.GMAIL_REDIRECT_URI) {
+        throw new Error('Production with GMAIL_ENABLED=true requires GMAIL_REDIRECT_URI');
+      }
+      if (!config.GMAIL_ENCRYPTION_KEY) {
+        throw new Error('Production with GMAIL_ENABLED=true requires GMAIL_ENCRYPTION_KEY');
+      }
+    }
   }
 
   return config;
@@ -250,6 +276,8 @@ export function getSafeConfig(config: EnvConfig): Record<string, unknown> {
     AI_API_KEY: config.AI_API_KEY ? '[REDACTED_AI_KEY]' : undefined,
     AUTH_OTP_HMAC_SECRET: config.AUTH_OTP_HMAC_SECRET ? '[REDACTED_AUTH_SECRET]' : undefined,
     SMTP_PASS: config.SMTP_PASS ? '[REDACTED_SMTP_PASS]' : undefined,
+    GMAIL_CLIENT_SECRET: config.GMAIL_CLIENT_SECRET ? '[REDACTED_GMAIL_SECRET]' : undefined,
+    GMAIL_ENCRYPTION_KEY: config.GMAIL_ENCRYPTION_KEY ? '[REDACTED_GMAIL_KEY]' : undefined,
   };
 }
 

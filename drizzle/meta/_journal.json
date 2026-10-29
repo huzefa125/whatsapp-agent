@@ -50,6 +50,13 @@
       "when": 1793271924287,
       "tag": "0006_browser_handoffs",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793280000000,
+      "tag": "0007_gmail_integration",
+      "breakpoints": true
     }
   ]
 }
