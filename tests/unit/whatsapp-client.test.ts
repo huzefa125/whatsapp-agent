@@ -103,3 +103,54 @@ describe('WhatsApp Graph API Client', () => {
     ).rejects.toThrow(/WhatsApp token unauthorized/);
   });
 });
+
+describe('sendImageMessage', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it('uploads the image then sends it by media id (Meta)', async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    global.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), body: init?.body });
+      const json = String(url).endsWith('/media') ? { id: 'media-1' } : { messages: [{ id: 'wamid.1' }] };
+      return new Response(JSON.stringify(json), { status: 200 });
+    }) as typeof fetch;
+
+    const client = new WhatsAppClient({ accessToken: 't', phoneNumberId: '99', timeoutMs: 1000 });
+    const res = await client.sendImageMessage({ to: '+15551234567', image: Buffer.from('png'), mimeType: 'image/png', caption: 'hi' });
+
+    expect(res.providerMessageId).toBe('wamid.1');
+    expect(calls[0]!.url).toMatch(/\/99\/media$/);
+    expect(JSON.parse(String(calls[1]!.body))).toMatchObject({ type: 'image', image: { id: 'media-1', caption: 'hi' } });
+  });
+
+  it('fails when the media upload is rejected', async () => {
+    global.fetch = vi.fn(async () => new Response(JSON.stringify({ error: { message: 'bad' } }), { status: 400 })) as typeof fetch;
+    const client = new WhatsAppClient({ accessToken: 't', phoneNumberId: '99', timeoutMs: 1000 });
+    await expect(
+      client.sendImageMessage({ to: '+15551234567', image: Buffer.from('png'), mimeType: 'image/png' })
+    ).rejects.toThrow(/bad/);
+  });
+});
+
+describe('sendReaction', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it('posts a reaction to the given message id', async () => {
+    let body: unknown;
+    global.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ messages: [{ id: 'wamid.r' }] }), { status: 200 });
+    }) as typeof fetch;
+
+    const client = new WhatsAppClient({ accessToken: 't', phoneNumberId: '99', timeoutMs: 1000 });
+    await client.sendReaction({ to: '+15551234567', messageId: 'wamid.in', emoji: '👀' });
+
+    expect(body).toMatchObject({ type: 'reaction', reaction: { message_id: 'wamid.in', emoji: '👀' } });
+  });
+});

@@ -1,8 +1,8 @@
-import { eq, and, desc, asc } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import { getDb } from '../../db/client';
 import { users, conversations, messages, NewUser, NewConversation, NewMessage } from '../../db/schema';
 import { getAiProvider, ChatMessage } from '../ai';
-import { SYSTEM_PROMPT, formatUserMessageForModel } from './prompts';
+import { SYSTEM_PROMPT, buildCapabilityContext, formatUserMessageForModel } from './prompts';
 import { ParsedTextMessageEvent } from '../whatsapp/types';
 import { logger } from '../../utils/logger';
 
@@ -119,12 +119,14 @@ export class AgentOrchestrator {
       })
       .from(messages)
       .where(and(eq(messages.conversationId, conversation.id), eq(messages.userId, user.id)))
-      .orderBy(asc(messages.createdAt))
+      .orderBy(desc(messages.createdAt))
       .limit(this.historyLimit);
+    // Newest N messages, restored to chronological order (asc + limit would keep the OLDEST N).
+    historyRows.reverse();
 
-    // 6. Build ChatMessage array
+    // 6. Build ChatMessage array (this path has no tools, so it must say so)
     const chatMessages: ChatMessage[] = [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: `${SYSTEM_PROMPT}\n${buildCapabilityContext([])}` },
     ];
 
     for (const msg of historyRows) {

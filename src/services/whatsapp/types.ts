@@ -121,6 +121,21 @@ export interface WhatsAppSendTextRequest {
   maxRetries?: number;
 }
 
+export interface WhatsAppReactionRequest {
+  to: string;
+  /** wamid of the user's message to react to. */
+  messageId: string;
+  /** A single emoji; an empty string removes the reaction. */
+  emoji: string;
+}
+
+export interface WhatsAppSendImageRequest {
+  to: string;
+  image: Buffer;
+  mimeType: 'image/png' | 'image/jpeg';
+  caption?: string;
+}
+
 export interface WhatsAppSendTemplateRequest {
   to: string;
   /** Name of a template approved in WhatsApp Manager. */

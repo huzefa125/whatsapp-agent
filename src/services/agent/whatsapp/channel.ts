@@ -15,6 +15,9 @@ export const VOICE_DISABLED_REPLY = "Voice notes aren't enabled yet. Please type
 export const VOICE_UNCLEAR_REPLY = "Sorry, I couldn't make out that voice note. Could you try again or type it?";
 export const TOO_LONG_REPLY = 'That message is too long for me to handle. Could you shorten it or split it up?';
 
+/** Shown on the user's message as soon as the request is accepted, while the agent works on it. */
+export const ACK_REACTION = '👀';
+
 const YES = new Set(['yes', 'y', 'yeah', 'yep', 'yup', 'ok', 'okay', 'sure', 'confirm', 'confirmed', 'go ahead', 'do it', '👍']);
 const NO = new Set(['no', 'n', 'nope', 'cancel', 'stop', 'reject', 'dont', "don't", 'do not', 'never mind', 'nevermind', '👎']);
 
@@ -129,6 +132,18 @@ export class WhatsAppChannel {
     } catch (err) {
       if (!(err instanceof BadRequestError)) throw err;
       await this.say(phone, TOO_LONG_REPLY);
+      return;
+    }
+    await this.react(phone, wamid, ACK_REACTION);
+  }
+
+  /** Best-effort acknowledgement: a failed reaction must never fail (and so redeliver) the inbound job. */
+  private async react(to: string, messageId: string, emoji: string): Promise<void> {
+    if (!this.client.sendReaction || !messageId) return;
+    try {
+      await this.client.sendReaction({ to, messageId, emoji });
+    } catch (err) {
+      logger.warn({ messageId, err: err instanceof Error ? err.message : String(err) }, 'Could not react to inbound message');
     }
   }
 

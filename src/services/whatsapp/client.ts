@@ -1,4 +1,10 @@
-import { WhatsAppSendTextRequest, WhatsAppSendTemplateRequest, WhatsAppSendMessageResult } from './types';
+import {
+  WhatsAppSendTextRequest,
+  WhatsAppSendTemplateRequest,
+  WhatsAppSendImageRequest,
+  WhatsAppReactionRequest,
+  WhatsAppSendMessageResult,
+} from './types';
 import { AppError, ExternalServiceError, RateLimitError } from '../../utils/errors';
 import { withRetry } from '../../utils/retry';
 import { logger } from '../../utils/logger';
@@ -13,6 +19,8 @@ export interface WhatsAppClientConfig {
 export interface IWhatsAppClient {
   sendTextMessage(request: WhatsAppSendTextRequest): Promise<WhatsAppSendMessageResult>;
   sendTemplateMessage?(request: WhatsAppSendTemplateRequest): Promise<WhatsAppSendMessageResult>;
+  sendImageMessage?(request: WhatsAppSendImageRequest): Promise<WhatsAppSendMessageResult>;
+  sendReaction?(request: WhatsAppReactionRequest): Promise<WhatsAppSendMessageResult>;
 }
 
 export class WhatsAppClient implements IWhatsAppClient {
@@ -112,6 +120,61 @@ export class WhatsAppClient implements IWhatsAppClient {
 
     logger.debug({ templateName: request.templateName }, 'Dispatching WhatsApp template message');
     return this.post(payload, cleanTo, request.maxRetries ?? 2);
+  }
+
+  /** Reacts to one of the user's messages with an emoji. */
+  async sendReaction(request: WhatsAppReactionRequest): Promise<WhatsAppSendMessageResult> {
+    const cleanTo = request.to.replace(/\D/g, '');
+    if (!cleanTo || cleanTo.length < 8 || cleanTo.length > 16) {
+      throw new AppError('Invalid recipient phone number', 400, 'WHATSAPP_INVALID_RECIPIENT');
+    }
+    return this.post(
+      {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: cleanTo,
+        type: 'reaction',
+        reaction: { message_id: request.messageId, emoji: request.emoji },
+      },
+      cleanTo,
+      0
+    );
+  }
+
+  /** Uploads the image to WhatsApp media storage, then sends it by media id (no public URL needed). */
+  async sendImageMessage(request: WhatsAppSendImageRequest): Promise<WhatsAppSendMessageResult> {
+    const cleanTo = request.to.replace(/\D/g, '');
+    if (!cleanTo || cleanTo.length < 8 || cleanTo.length > 16) {
+      throw new AppError('Invalid recipient phone number', 400, 'WHATSAPP_INVALID_RECIPIENT');
+    }
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', request.mimeType);
+    form.append('file', new Blob([new Uint8Array(request.image)], { type: request.mimeType }), 'screenshot.png');
+
+    const upload = await fetch(this.baseUrl.replace(/\/messages$/, '/media'), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.accessToken}` },
+      body: form,
+      signal: AbortSignal.timeout(this.timeoutMs * 3),
+    });
+    const uploaded = (await upload.json().catch(() => null)) as { id?: string; error?: { message?: string } } | null;
+    if (!upload.ok || !uploaded?.id) {
+      throw new ExternalServiceError('WhatsApp API', uploaded?.error?.message || `Media upload failed (HTTP ${upload.status})`, {
+        statusCode: upload.status,
+      });
+    }
+    return this.post(
+      {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: cleanTo,
+        type: 'image',
+        image: { id: uploaded.id, ...(request.caption ? { caption: request.caption.slice(0, 1024) } : {}) },
+      },
+      cleanTo,
+      0
+    );
   }
 
   private async post(

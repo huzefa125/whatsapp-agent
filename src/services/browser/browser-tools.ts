@@ -117,6 +117,9 @@ const waitInput = z
 const extractInput = z
   .object({ runId, what: z.enum(['text', 'links', 'tables']), ref: ref.optional().describe('Limit to one element') })
   .strict();
+const screenshotInput = z
+  .object({ runId, sendToUser: z.boolean().optional().describe('Send the screenshot to the user in the chat') })
+  .strict();
 const inspectInput = z.object({ runId, ref }).strict();
 const sensitiveInput = z
   .object({
@@ -133,7 +136,13 @@ const closeInput = z
 type Base = Pick<ToolDefinition<any, any>, 'retry' | 'requiresConfirmation'>;
 const noRetry: Base = { retry: { maxRetries: 0, backoffMs: 0 }, requiresConfirmation: false };
 
-export function createBrowserTools(service: BrowserService, opts: { handoffs?: HandoffService | null } = {}): Array<ToolDefinition<any, any>> {
+export interface BrowserToolOptions {
+  handoffs?: HandoffService | null;
+  /** Delivers a PNG to the user's own verified chat. Absent when the channel cannot send images. */
+  sendImage?: (userId: string, png: Buffer, caption: string) => Promise<void>;
+}
+
+export function createBrowserTools(service: BrowserService, opts: BrowserToolOptions = {}): Array<ToolDefinition<any, any>> {
   /** Runs a read-only step that returns a snapshot of the page afterwards. */
   const snapshotStep = (userId: string, id: string, kind: string, act?: (s: BrowserSession) => Promise<unknown>) =>
     service.step(userId, id, { kind, stateOf: (v: PageSnapshot) => v.state }, async (session) => {
@@ -312,19 +321,35 @@ export function createBrowserTools(service: BrowserService, opts: { handoffs?: H
       }),
   };
 
-  const screenshot: ToolDefinition<z.infer<typeof runOnly>, unknown> = {
+  const screenshot: ToolDefinition<z.infer<typeof screenshotInput>, unknown> = {
     name: 'browser_screenshot',
-    description: 'Captures a screenshot as evidence. The image is kept in memory only and is not stored; you get its size and a hash.',
-    inputSchema: runOnly,
+    description:
+      'Captures a screenshot of the current page. The image is never stored. Set sendToUser=true when the user asks for a screenshot: it is then sent to them in this chat. Without it you only get the size and a hash.',
+    inputSchema: screenshotInput,
     permissions: ['browser:read'],
-    sideEffect: 'none',
+    sideEffect: 'idempotent', // a replayed step is not repeated, so the image is never sent twice
     requiresConfirmation: false,
     retry: { maxRetries: 0, backoffMs: 0 },
-    timeoutMs: 20_000,
+    timeoutMs: 45_000,
     execute: (input, ctx) =>
       guard(async () => {
-        const r = await service.step(ctx.userId, input.runId, { kind: 'screenshot' }, (s) => s.screenshot());
-        return r.replayed ? { note: REPLAY_NOTE } : { captured: true, bytes: r.value.bytes.length, sha256: r.value.sha256, stored: false };
+        const wantSend = input.sendToUser === true;
+        if (wantSend && !opts.sendImage) {
+          throw new ToolError('SCREENSHOT_DELIVERY_UNAVAILABLE', 'Sending screenshots is not available here.');
+        }
+        const r = await service.step(ctx.userId, input.runId, { kind: 'screenshot' }, async (s) => {
+          const shot = await s.screenshot();
+          if (!wantSend) return { ...shot, sent: false };
+          // Sign-in, payment and account pages can show personal data: never push those into a chat.
+          if (isSensitiveUrl(s.currentUrl)) {
+            throw new ToolError('SCREENSHOT_BLOCKED', 'This page may show sensitive information, so I will not send a screenshot of it.');
+          }
+          await opts.sendImage!(ctx.userId, shot.bytes, `Screenshot of ${new URL(s.currentUrl).host}`);
+          return { ...shot, sent: true };
+        });
+        return r.replayed
+          ? { note: REPLAY_NOTE }
+          : { captured: true, sentToUser: r.value.sent, bytes: r.value.bytes.length, sha256: r.value.sha256, stored: false };
       }),
   };
 

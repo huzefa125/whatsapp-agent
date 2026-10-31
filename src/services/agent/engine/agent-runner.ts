@@ -5,7 +5,7 @@ import { AppError, ExternalServiceError, ForbiddenError, RateLimitError } from '
 import { logger } from '../../../utils/logger';
 import { AgentTask } from '../../../db/schema';
 import type { AiProvider, ToolCompletion, ToolSpec, ToolChatMessage } from '../../ai/types';
-import { TOOL_USE_SYSTEM_PROMPT, formatUserMessageForModel } from '../prompts';
+import { TOOL_USE_SYSTEM_PROMPT, buildCapabilityContext, formatUserMessageForModel } from '../prompts';
 import { PermissionResolver, UserGrants } from './permissions';
 import {
   sanitizeFinalResponse,
@@ -222,8 +222,8 @@ export class AgentRunner {
 
       const rounds = countToolRounds(transcript);
       const extraContext = (await this.deps.systemContext?.(task.userId, task)) ?? null;
-      const systemPrompt = extraContext ? `${TOOL_USE_SYSTEM_PROMPT}
-${extraContext}` : TOOL_USE_SYSTEM_PROMPT;
+      const capabilities = buildCapabilityContext(specs.map((s) => s.name));
+      const systemPrompt = [TOOL_USE_SYSTEM_PROMPT, capabilities, extraContext].filter(Boolean).join('\n\n');
       const completion = await this.callModel(ctx, provider, toProviderMessages(systemPrompt, transcript), specs);
       ctx.stats.model = completion.model;
       ctx.stats.promptTokens += completion.usage?.promptTokens ?? 0;
