@@ -4,6 +4,7 @@ import { getDb } from '../../db/client';
 import { gmailSendLog } from '../../db/schema';
 import { getConfig } from '../../config/env';
 import { logger } from '../../utils/logger';
+import { ToolError } from '../agent/engine/types';
 import type { GmailOAuthService } from './gmail-oauth';
 import { GMAIL_SCOPES } from './gmail-oauth';
 
@@ -63,6 +64,19 @@ function getHeader(headers: gmail_v1.Schema$MessagePartHeader[] | undefined, nam
   return headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '';
 }
 
+/** A wrong or stale draft id is the model's mistake, so say so plainly instead of "failed unexpectedly". */
+function draftLookupError(err: unknown): unknown {
+  const status = (err as { code?: number; status?: number; response?: { status?: number } })?.code ??
+    (err as { response?: { status?: number } })?.response?.status;
+  if (status === 404 || status === 400) {
+    return new ToolError(
+      'DRAFT_NOT_FOUND',
+      'There is no draft with that id. Use the draftId returned by gmail_draft or gmail_reply (never an email message id), or create the draft again.'
+    );
+  }
+  return err;
+}
+
 export interface EmailMetadata {
   id: string;
   threadId: string;
@@ -101,6 +115,8 @@ export interface GmailApiService {
   listThreadMessages(userId: string, threadId: string): Promise<EmailMetadata[]>;
   createDraft(userId: string, to: string, subject: string, body: string, threadId?: string, inReplyTo?: string): Promise<DraftResult>;
   sendDraft(userId: string, draftId: string, idempotencyKey: string): Promise<SendResult>;
+  /** Recipient and subject of a draft, for the confirmation shown to the user. */
+  describeDraft?(userId: string, draftId: string): Promise<{ to: string; subject: string }>;
   getConnectionStatus(userId: string): ReturnType<GmailOAuthService['getStatus']>;
 }
 
@@ -291,11 +307,11 @@ export function createGmailApiService(oauth: GmailOAuthService): GmailApiService
       }
 
       // Read the draft first to get metadata for the send log
-      const draftData = await gmail.users.drafts.get({
-        userId: 'me',
-        id: draftId,
-        format: 'metadata',
-      });
+      const draftData = await gmail.users.drafts
+        .get({ userId: 'me', id: draftId, format: 'metadata' })
+        .catch((err: unknown) => {
+          throw draftLookupError(err);
+        });
 
       const draftHeaders = draftData.data.message?.payload?.headers;
       const recipient = getHeader(draftHeaders, 'To');
@@ -323,6 +339,17 @@ export function createGmailApiService(oauth: GmailOAuthService): GmailApiService
 
       logger.info({ userId, messageId, threadId }, 'Email sent via Gmail');
       return { messageId, threadId, duplicate: false };
+    },
+
+    async describeDraft(userId, draftId) {
+      const { gmail } = await getGmail(userId);
+      const draft = await gmail.users.drafts
+        .get({ userId: 'me', id: draftId, format: 'metadata' })
+        .catch((err: unknown) => {
+          throw draftLookupError(err);
+        });
+      const headers = draft.data.message?.payload?.headers;
+      return { to: getHeader(headers, 'To'), subject: getHeader(headers, 'Subject') };
     },
 
     async getConnectionStatus(userId) {

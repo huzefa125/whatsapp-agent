@@ -23,11 +23,35 @@ const NO = new Set(['no', 'n', 'nope', 'cancel', 'stop', 'reject', 'dont', "don'
 
 const normalizeCommand = (text: string) => text.trim().toLowerCase().replace(/[\s.!]+$/g, '');
 
-/** Strict whole-message match: "yes please set it" is a normal message, not a confirmation. */
+const APPROVE_WORDS = new Set([
+  'yes', 'y', 'yeah', 'yep', 'yup', 'ok', 'okay', 'sure', 'confirm', 'confirmed', 'approve', 'approved',
+  'go', 'send', 'haan', 'ha', 'han',
+]);
+const REJECT_WORDS = new Set(['no', 'n', 'nope', 'nah', 'cancel', 'stop', 'reject', 'never', 'nahi', 'mat']);
+const FILLER_WORDS = new Set([
+  'it', 'this', 'that', 'please', 'pls', 'ahead', 'now', 'do', 'thanks', 'thank', 'you', 'sir', 'bhai',
+  'kindly', 'bhej', 'de', 'kar', 'karo', 'dijiye', 'the', 'email', 'mail',
+]);
+const MAX_DECISION_WORDS = 5;
+
+/**
+ * Whole-message match, deliberately conservative: "yes please set it" is a normal message, not a
+ * confirmation. Short natural answers such as "yes send it" count when every word is an agreement,
+ * a refusal or a filler word, so a message that adds anything else ("yes but change the subject")
+ * is never mistaken for approval.
+ */
 export function parseDecision(text: string): 'approve' | 'reject' | null {
   const t = normalizeCommand(text);
   if (YES.has(t)) return 'approve';
   if (NO.has(t)) return 'reject';
+
+  const words = t.replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
+  if (words.length === 0 || words.length > MAX_DECISION_WORDS) return null;
+  if (!words.every((w) => APPROVE_WORDS.has(w) || REJECT_WORDS.has(w) || FILLER_WORDS.has(w))) return null;
+  const approves = words.some((w) => APPROVE_WORDS.has(w));
+  const rejects = words.some((w) => REJECT_WORDS.has(w));
+  if (approves && !rejects) return 'approve';
+  if (rejects && !approves) return 'reject';
   return null;
 }
 

@@ -156,7 +156,7 @@ function gmailSendDraftTool(gmail: GmailApiService): ToolDefinition<{ draftId: s
       'ONLY call this after the user has explicitly confirmed the recipient, subject and body. ' +
       'If any detail changed since the user approved, create a new draft and ask for fresh approval.',
     inputSchema: z.object({
-      draftId: z.string().min(1).max(100).describe('The draft ID to send'),
+      draftId: z.string().min(1).max(100).describe('The draftId returned by gmail_draft or gmail_reply. NOT an email message id from a search.'),
     }).strict(),
     permissions: ['gmail:send'],
     sideEffect: 'non_idempotent',
@@ -176,7 +176,13 @@ function gmailSendDraftTool(gmail: GmailApiService): ToolDefinition<{ draftId: s
       }
       return { ok: true, sent: true, messageId: result.messageId, threadId: result.threadId };
     },
-    describeCall({ draftId }) {
+    async describeCall({ draftId }, { userId }) {
+      try {
+        const d = await gmail.describeDraft?.(userId, draftId);
+        if (d) return `Send this email to ${d.to || 'unknown recipient'} with the subject "${d.subject || '(no subject)'}"`;
+      } catch {
+        /* fall back to the generic wording below */
+      }
       return `Send email draft ${draftId}`;
     },
   };

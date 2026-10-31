@@ -6,6 +6,7 @@ import { logger } from '../../../utils/logger';
 import { AgentTask } from '../../../db/schema';
 import type { AiProvider, ToolCompletion, ToolSpec, ToolChatMessage } from '../../ai/types';
 import { TOOL_USE_SYSTEM_PROMPT, buildCapabilityContext, formatUserMessageForModel } from '../prompts';
+import { alreadyNudged, claimNotice, CLAIM_FALLBACK_REPLY, unverifiedClaim } from './claim-guard';
 import { PermissionResolver, UserGrants } from './permissions';
 import {
   sanitizeFinalResponse,
@@ -232,6 +233,17 @@ export class AgentRunner {
       if (completion.kind === 'text') {
         const text = sanitizeFinalResponse(completion.content, this.cfg.maxResponseChars);
         if (!text) throw new TaskFailure('MODEL_EMPTY_RESPONSE', 'The AI returned an empty response.', true);
+
+        const claimed = unverifiedClaim(text, transcript);
+        if (claimed) {
+          ctx.log.warn({ claimed }, 'Model claimed an action no tool performed');
+          // One chance to do it properly; after that the false claim is never shown to the user.
+          if (alreadyNudged(transcript)) return { kind: 'final', text: CLAIM_FALLBACK_REPLY };
+          transcript.push({ role: 'assistant', content: truncate(scrubText(text), 2000) });
+          transcript.push({ role: 'user', content: claimNotice(claimed) });
+          await repo.checkpoint(task.id, executionId, transcript);
+          continue;
+        }
         return { kind: 'final', text };
       }
       if (completion.kind !== 'tool_calls' || !Array.isArray(completion.toolCalls) || completion.toolCalls.length === 0) {

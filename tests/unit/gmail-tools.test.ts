@@ -84,6 +84,25 @@ describe('Gmail Tools', () => {
     });
   });
 
+  describe('gmail_send_draft confirmation text', () => {
+    const send = byName('gmail_send_draft');
+
+    it('shows the recipient and subject instead of a bare id', async () => {
+      const api = { ...mockApi, describeDraft: vi.fn().mockResolvedValue({ to: 'a@b.com', subject: 'CRM Meeting at 3 PM' }) };
+      const t = createGmailTools(api).find((x) => x.name === 'gmail_send_draft')!;
+      await expect(t.describeCall!({ draftId: 'd1' }, { userId: 'user-123' })).resolves.toBe(
+        'Send this email to a@b.com with the subject "CRM Meeting at 3 PM"'
+      );
+    });
+
+    it('falls back to the id if the draft cannot be read', async () => {
+      const api = { ...mockApi, describeDraft: vi.fn().mockRejectedValue(new Error('nope')) };
+      const t = createGmailTools(api).find((x) => x.name === 'gmail_send_draft')!;
+      await expect(t.describeCall!({ draftId: 'd1' }, { userId: 'user-123' })).resolves.toBe('Send email draft d1');
+      expect(send.describeCall).toBeDefined();
+    });
+  });
+
   describe('gmail_search', () => {
     const tool = byName('gmail_search');
 
