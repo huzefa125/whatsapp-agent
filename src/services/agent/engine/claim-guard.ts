@@ -46,7 +46,7 @@ const RULES: ClaimRule[] = [
   {
     // Refusing to search/browse. Typical cause: older replies in the chat, written before the tools existed.
     claim:
-      /\b(?:i\s*(?:don(?:'|’)?t|do not|can(?:'|’)?t|cannot|can not|am unable to|(?:'|’)m unable to|am not able to|(?:'|’)m not able to)|(?:i\s+(?:have|got)\s+no|no)\s+(?:ability|way|capabilit\w*|access))\b[^.!?\n]{0,70}\b(?:search|browse|browsing|web|google|look\s*up|internet|online|websites?)\b/i,
+      /\b(?:i\s*(?:don(?:'|’)?t|do not|can(?:'|’)?t|cannot|can not|am unable to|(?:'|’)m unable to|am not able to|(?:'|’)m not able to)|(?:i\s+(?:have|got)\s+no|no)\s+(?:ability|way|capabilit\w*))\b[^.!?\n]{0,70}\b(?:search|browse|browsing|web|google|look\s*up|internet|websites?)\b/i,
     whenToolsAvailable: SEARCH_TOOLS,
     proof: (m) => (SEARCH_TOOLS as readonly string[]).includes(m.name) || m.name.startsWith('browser_'),
     notice:
