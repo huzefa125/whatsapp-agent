@@ -550,3 +550,17 @@ MEMORY_MAX_RETRIEVED=5
 MEMORY_MAX_CONTEXT_CHARS=2500
 MEMORY_DEFAULT_EXPIRY_DAYS=0
 ```
+
+## 15. Web Search
+
+The `web_search` tool (`src/services/search/`) gives the agent current information without a browser. It is registered only when `WEB_SEARCH_PROVIDER` is `tavily`, `brave` or `searxng`; otherwise the assistant is told it cannot look things up and must not pretend to. Users need the `web:search` permission (included in the `AGENT_DEFAULT_PERMISSIONS` default).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `WEB_SEARCH_PROVIDER` | `none` | `none`, `tavily`, `brave` or `searxng` |
+| `WEB_SEARCH_API_KEY` | | Required for `tavily` and `brave` |
+| `WEB_SEARCH_URL` | | Required for `searxng` (your instance; `json` format must be enabled) |
+| `WEB_SEARCH_MAX_RESULTS` | `5` | Results per search |
+| `WEB_SEARCH_DAILY_LIMIT_PER_USER` | `20` | Per-user daily cap that protects a free quota (in-memory, per process) |
+
+Results are returned as untrusted data: links are restricted to http(s), text is cleaned and capped, and the prompt tells the model to say results are snippets from the web, not confirmed prices or availability.

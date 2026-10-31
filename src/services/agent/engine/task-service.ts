@@ -18,6 +18,7 @@ import { ToolRegistry } from './tool-registry';
 import { getReminderService, ReminderService } from '../../reminders/reminder-service';
 import { createReminderTools } from '../../reminders/reminder-tools';
 import { getIntegrations } from '../../integrations';
+import { createSearchTools } from '../../search';
 import { getMemoryService, MemoryService, createMemoryTools } from '../../memory';
 
 export interface CreateTaskRequest {
@@ -38,7 +39,7 @@ export interface TaskServiceDeps {
   memory?: MemoryService;
 }
 
-/** Built-in tools: calculator, reminders, memory, plus the tools of every enabled integration. */
+/** Built-in tools: calculator, reminders, memory, web search (when configured), plus the tools of every enabled integration. */
 export function createDefaultToolRegistry(
   reminders: ReminderService = getReminderService(),
   memory: MemoryService = getMemoryService()
@@ -46,6 +47,7 @@ export function createDefaultToolRegistry(
   const registry = new ToolRegistry().register(calculatorTool);
   for (const tool of createReminderTools(reminders)) registry.register(tool);
   for (const tool of createMemoryTools(memory)) registry.register(tool);
+  for (const tool of createSearchTools()) registry.register(tool);
   // Integrations (the browser fallback today; official API providers in later phases) contribute their own tools.
   for (const tool of getIntegrations().allTools()) registry.register(tool);
   return registry;

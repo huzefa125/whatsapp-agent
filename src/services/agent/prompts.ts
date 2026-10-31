@@ -48,6 +48,10 @@ const CAPABILITY_GROUPS: Array<{ prefix: string; can: string; cannot?: string }>
     can: "search and read the user's Gmail, and draft, reply and send email (sending only after the user confirms the exact recipient, subject and body)",
   },
   {
+    prefix: 'web_search',
+    can: 'search the web for current news, prices, availability and comparisons (call web_search; results are snippets, so say they come from the web and never present prices or availability as confirmed)',
+  },
+  {
     prefix: 'browser_',
     can: 'open websites in a browser, read what they show, and send the user a screenshot of the page when they ask (call browser_screenshot with sendToUser=true; say it was sent only if the result says sentToUser is true)',
   },
@@ -74,10 +78,12 @@ export function buildCapabilityContext(toolNames: readonly string[]): string {
       if (g.cannot) cannot.push(g.cannot);
     } else if (g.prefix === 'gmail_') {
       unavailable.push('read or send email (Gmail is not available for this account)');
-    } else if (g.prefix === 'browser_') {
+    } else if (g.prefix === 'web_search' && !has('browser_')) {
       unavailable.push(
         'browse the web, check live prices, flights, availability or news (you have no browser or search tool, so never pretend to look anything up)'
       );
+    } else if (g.prefix === 'browser_' && has('web_search')) {
+      unavailable.push('open a specific website or fill in forms (you can only search)');
     }
   }
   const lines = [

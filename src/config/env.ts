@@ -63,7 +63,7 @@ const envSchema = z.object({
   AGENT_HISTORY_LIMIT: z.coerce.number().int().min(0).max(100).default(20),
   AGENT_CONFIRMATION_TTL_MINUTES: z.coerce.number().int().min(1).default(30),
   // Comma-separated permissions granted to every fully verified user (no per-user grants yet).
-  AGENT_DEFAULT_PERMISSIONS: z.string().default('utility:read,reminders:read,reminders:write,memory:read,memory:write'),
+  AGENT_DEFAULT_PERMISSIONS: z.string().default('utility:read,reminders:read,reminders:write,memory:read,memory:write,web:search'),
 
   // Browser automation (Phase 1). Off by default; users also need the browser:* permissions
   // (add `browser:*` to AGENT_DEFAULT_PERMISSIONS to grant them to every verified user).
@@ -191,6 +191,15 @@ const envSchema = z.object({
   MEMORY_MAX_RETRIEVED: z.coerce.number().int().min(1).max(20).default(5),
   MEMORY_MAX_CONTEXT_CHARS: z.coerce.number().int().min(200).max(10000).default(2500),
   MEMORY_DEFAULT_EXPIRY_DAYS: z.coerce.number().int().min(0).max(3650).default(0), // 0 = no expiry
+
+  // Web search (web_search tool). 'none' = off. tavily/brave need WEB_SEARCH_API_KEY; searxng needs WEB_SEARCH_URL.
+  // Users also need the web:search permission (it is in the AGENT_DEFAULT_PERMISSIONS default).
+  WEB_SEARCH_PROVIDER: z.enum(['none', 'tavily', 'brave', 'searxng']).default('none'),
+  WEB_SEARCH_API_KEY: z.string().optional().default(''),
+  WEB_SEARCH_URL: z.string().optional().default(''),
+  WEB_SEARCH_MAX_RESULTS: z.coerce.number().int().min(1).max(10).default(5),
+  // Searches per user per UTC day; keeps a free-tier quota from being drained by one user. 0 = unlimited.
+  WEB_SEARCH_DAILY_LIMIT_PER_USER: z.coerce.number().int().min(0).default(20),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
@@ -211,6 +220,13 @@ export function validateEnv(customEnv?: Record<string, unknown>): EnvConfig {
   }
 
   const config = result.data;
+
+  if ((config.WEB_SEARCH_PROVIDER === 'tavily' || config.WEB_SEARCH_PROVIDER === 'brave') && !config.WEB_SEARCH_API_KEY) {
+    throw new Error(`WEB_SEARCH_PROVIDER=${config.WEB_SEARCH_PROVIDER} requires WEB_SEARCH_API_KEY`);
+  }
+  if (config.WEB_SEARCH_PROVIDER === 'searxng' && !/^https?:\/\//.test(config.WEB_SEARCH_URL)) {
+    throw new Error('WEB_SEARCH_PROVIDER=searxng requires WEB_SEARCH_URL (an http(s) URL of your SearXNG instance)');
+  }
 
   // Strict production assertions
   if (config.NODE_ENV === 'production') {
@@ -285,6 +301,7 @@ export function getSafeConfig(config: EnvConfig): Record<string, unknown> {
     AI_API_KEY: config.AI_API_KEY ? '[REDACTED_AI_KEY]' : undefined,
     AUTH_OTP_HMAC_SECRET: config.AUTH_OTP_HMAC_SECRET ? '[REDACTED_AUTH_SECRET]' : undefined,
     SMTP_PASS: config.SMTP_PASS ? '[REDACTED_SMTP_PASS]' : undefined,
+    WEB_SEARCH_API_KEY: config.WEB_SEARCH_API_KEY ? '[REDACTED_SEARCH_KEY]' : undefined,
     GMAIL_CLIENT_SECRET: config.GMAIL_CLIENT_SECRET ? '[REDACTED_GMAIL_SECRET]' : undefined,
     GMAIL_ENCRYPTION_KEY: config.GMAIL_ENCRYPTION_KEY ? '[REDACTED_GMAIL_KEY]' : undefined,
   };
