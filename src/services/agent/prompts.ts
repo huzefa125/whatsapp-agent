@@ -45,7 +45,7 @@ const CAPABILITY_GROUPS: Array<{ prefix: string; can: string; cannot?: string }>
   { prefix: 'memory_', can: 'remember and forget things the user explicitly asks you to' },
   {
     prefix: 'gmail_',
-    can: "search and read the user's Gmail, and draft, reply and send email (sending only after the user confirms the exact recipient, subject and body)",
+    can: "search and read the user's Gmail, and draft, reply and send email (sending only after the user confirms the exact recipient, subject and body). If Gmail is not connected yet, call gmail_connect and send the user the plain-text link",
   },
   {
     prefix: 'web_search',

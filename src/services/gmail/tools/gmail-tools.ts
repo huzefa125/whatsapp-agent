@@ -1,14 +1,19 @@
 import { z } from 'zod';
 import type { ToolDefinition } from '../../agent/engine/types';
 import type { GmailApiService } from '../gmail-api';
+import type { GmailOAuthService } from '../gmail-oauth';
 
 /**
  * Creates typed, validated agent tools for Gmail operations.
  * All tools follow the existing engine patterns: Zod-validated input/output,
  * explicit permissions, side-effect classification, and confirmation for sends.
  */
-export function createGmailTools(gmail: GmailApiService): Array<ToolDefinition<any, any>> {
+export function createGmailTools(
+  gmail: GmailApiService,
+  oauth?: Pick<GmailOAuthService, 'startAuthorization'>
+): Array<ToolDefinition<any, any>> {
   return [
+    ...(oauth ? [gmailConnectTool(oauth)] : []),
     gmailSearchTool(gmail),
     gmailReadTool(gmail),
     gmailSummarizeTool(gmail),
@@ -242,6 +247,38 @@ function gmailListThreadTool(gmail: GmailApiService): ToolDefinition<{ threadId:
     async execute({ threadId }, ctx) {
       const messages = await gmail.listThreadMessages(ctx.userId, threadId);
       return { messages, count: messages.length };
+    },
+  };
+}
+
+// ── Gmail Connect ─────────────────────────────────────────────────
+function gmailConnectTool(
+  oauth: Pick<GmailOAuthService, 'startAuthorization'>
+): ToolDefinition<{ allowSending?: boolean }, any> {
+  return {
+    name: 'gmail_connect',
+    description:
+      'Creates a secure Google sign-in link so the user can connect their Gmail. Use it when the user wants to connect or read their email, or when another Gmail tool says Gmail is not connected. ' +
+      'Send the link as plain text and tell them to open it and approve access; never ask for a password or code in chat. Set allowSending=true only if the user wants you to send emails too (read-only otherwise).',
+    inputSchema: z
+      .object({ allowSending: z.boolean().optional().describe('Also request permission to send email (default: read-only)') })
+      .strict(),
+    permissions: ['gmail:read'],
+    sideEffect: 'idempotent',
+    requiresConfirmation: false,
+    timeoutMs: 8000,
+    retry: { maxRetries: 0, backoffMs: 0 },
+    async execute({ allowSending }, ctx) {
+      const { authUrl } = await oauth.startAuthorization(ctx.userId, allowSending === true);
+      return { link: authUrl, access: allowSending ? 'read and send' : 'read only' };
+    },
+    formatResult(out) {
+      return {
+        ok: true,
+        link: out.link,
+        access: out.access,
+        note: 'The link works once and expires in a few minutes. Tell the user to open it, approve access, then say "done".',
+      };
     },
   };
 }

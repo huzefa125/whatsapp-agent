@@ -65,6 +65,25 @@ describe('Gmail Tools', () => {
     expect(tools.length).toBe(8);
   });
 
+  describe('gmail_connect', () => {
+    it('is only registered when an OAuth service is provided', () => {
+      expect(tools.some((t) => t.name === 'gmail_connect')).toBe(false);
+    });
+
+    it('returns a one-time sign-in link for the calling user, read-only unless sending is requested', async () => {
+      const startAuthorization = vi.fn(async () => ({ authUrl: 'https://accounts.google.com/o/oauth2/v2/auth?state=abc' }));
+      const tool = createGmailTools(mockApi, { startAuthorization }).find((t) => t.name === 'gmail_connect')!;
+      expect(tool.permissions).toEqual(['gmail:read']);
+
+      const out = await tool.execute({}, fakeCtx);
+      expect(startAuthorization).toHaveBeenCalledWith('user-123', false);
+      expect(tool.formatResult!(out)).toMatchObject({ ok: true, link: expect.stringContaining('accounts.google.com'), access: 'read only' });
+
+      await tool.execute({ allowSending: true }, fakeCtx);
+      expect(startAuthorization).toHaveBeenLastCalledWith('user-123', true);
+    });
+  });
+
   describe('gmail_search', () => {
     const tool = byName('gmail_search');
 

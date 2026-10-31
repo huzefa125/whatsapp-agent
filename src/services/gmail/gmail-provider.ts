@@ -37,6 +37,6 @@ export class GmailIntegrationProvider implements IntegrationProvider {
   }
 
   tools() {
-    return createGmailTools(this.api);
+    return createGmailTools(this.api, this.oauth);
   }
 }
