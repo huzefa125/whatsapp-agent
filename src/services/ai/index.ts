@@ -13,6 +13,7 @@ let currentAiProvider: AiProvider | null = null;
 export function getAiProvider(): AiProvider {
   if (!currentAiProvider) {
     const config = getConfig();
+    const fallbackModels = config.AI_FALLBACK_MODELS.split(',');
 
     if (config.AI_PROVIDER === 'stub') {
       logger.info('Using StubAiProvider for AI completions');
@@ -26,6 +27,7 @@ export function getAiProvider(): AiProvider {
         defaultMaxTokens: config.AI_MAX_TOKENS,
         defaultTemperature: config.AI_TEMPERATURE,
         timeoutMs: config.AI_TIMEOUT_MS,
+        fallbackModels,
       });
     } else if (config.AI_PROVIDER === 'gemini') {
       const model = config.AI_MODEL || 'gemini-3.5-flash';
@@ -37,6 +39,7 @@ export function getAiProvider(): AiProvider {
         defaultMaxTokens: config.AI_MAX_TOKENS,
         defaultTemperature: config.AI_TEMPERATURE,
         timeoutMs: config.AI_TIMEOUT_MS,
+        fallbackModels,
       });
     } else {
       // Default: OpenAI or compatible endpoint
@@ -48,6 +51,7 @@ export function getAiProvider(): AiProvider {
         defaultMaxTokens: config.AI_MAX_TOKENS,
         defaultTemperature: config.AI_TEMPERATURE,
         timeoutMs: config.AI_TIMEOUT_MS,
+        fallbackModels,
       });
     }
   }

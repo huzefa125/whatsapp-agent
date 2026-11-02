@@ -40,6 +40,8 @@ const envSchema = z.object({
   AI_API_KEY: z.string().optional().default(''),
   AI_BASE_URL: z.string().url().optional(),
   AI_MODEL: z.string().default('gpt-4o-mini'),
+  // Comma-separated models to try, in order, when AI_MODEL is gone, rate-limited or failing (free models are flaky).
+  AI_FALLBACK_MODELS: z.string().optional().default(''),
   AI_MAX_TOKENS: z.coerce.number().int().positive().default(1000),
   // Per-request HTTP timeout. Thinking models (e.g. Gemini 3.x) can take 10s+ for a tool-calling turn.
   AI_TIMEOUT_MS: z.coerce.number().int().min(1000).default(30000),

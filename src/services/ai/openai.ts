@@ -19,6 +19,8 @@ export interface OpenAiProviderConfig {
   defaultMaxTokens?: number;
   defaultTemperature?: number;
   timeoutMs?: number;
+  /** Tried in order when the model is gone (404), overloaded (429), failing (5xx) or returns nothing. */
+  fallbackModels?: string[];
 }
 
 export class OpenAiCompatibleProvider implements AiProvider {
@@ -28,6 +30,7 @@ export class OpenAiCompatibleProvider implements AiProvider {
   private defaultMaxTokens: number;
   private defaultTemperature: number;
   private timeoutMs: number;
+  private fallbackModels: string[];
 
   constructor(config: OpenAiProviderConfig) {
     if (!config.apiKey || config.apiKey.trim() === '') {
@@ -42,6 +45,7 @@ export class OpenAiCompatibleProvider implements AiProvider {
     this.defaultMaxTokens = config.defaultMaxTokens || 1000;
     this.defaultTemperature = config.defaultTemperature ?? 0.7;
     this.timeoutMs = config.timeoutMs || 15000;
+    this.fallbackModels = (config.fallbackModels ?? []).map((m) => m.trim()).filter(Boolean);
 
     this.client = new OpenAI({
       apiKey: config.apiKey,
@@ -155,10 +159,10 @@ export class OpenAiCompatibleProvider implements AiProvider {
     });
 
     try {
-      const response = await withRetry(
+      const response = await this.withModelFallback(model, (useModel) => withRetry(
         async () =>
           await this.client.chat.completions.create({
-            model,
+            model: useModel,
             messages: wireMessages,
             max_tokens: maxTokens,
             temperature,
@@ -178,7 +182,7 @@ export class OpenAiCompatibleProvider implements AiProvider {
             err instanceof OpenAI.APIError &&
             (err.status === 429 || (err.status !== undefined && err.status >= 500)),
         }
-      );
+      ));
 
       const choice = response.choices[0];
       if (!choice || !choice.message) {
@@ -224,7 +228,42 @@ export class OpenAiCompatibleProvider implements AiProvider {
     }
   }
 
+  /** Free and shared models come and go, so one model failing must not take the assistant down with it. */
+  private shouldFallBack(err: unknown): boolean {
+    if (err instanceof OpenAI.APIError && err.status !== undefined) {
+      return err.status === 404 || err.status === 408 || err.status === 429 || err.status >= 500;
+    }
+    return err instanceof OpenAI.APIConnectionError || err instanceof ExternalServiceError;
+  }
+
+  private async withModelFallback<T>(primary: string, run: (model: string) => Promise<T>): Promise<T> {
+    const models = [primary, ...this.fallbackModels.filter((m) => m !== primary)];
+    for (let i = 0; ; i++) {
+      const current = models[i] as string;
+      try {
+        return await run(current);
+      } catch (err) {
+        const next = models[i + 1];
+        if (!next || !this.shouldFallBack(err)) throw err;
+        logger.warn(
+          { failedModel: current, nextModel: next, error: err instanceof Error ? err.message.slice(0, 200) : String(err) },
+          'AI model failed; trying the next fallback model'
+        );
+      }
+    }
+  }
+
   private mapError(err: unknown): Error {
+    if (err instanceof OpenAI.NotFoundError) {
+      // The model was removed or misspelled. Retrying never helps, so fail fast with a message that says what to fix.
+      logger.error({ error: err.message }, 'AI model is not available: change AI_MODEL (or AI_FALLBACK_MODELS)');
+      return new AppError(
+        `The configured AI model is not available (${err.message.slice(0, 160)}). Change AI_MODEL.`,
+        500,
+        'AI_CONFIG_ERROR'
+      );
+    }
+
     if (err instanceof OpenAI.RateLimitError) {
       logger.warn({ error: err.message }, 'AI provider rate limit reached');
       return new RateLimitError('AI provider capacity limit exceeded. Please try again shortly.');
